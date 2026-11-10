@@ -1,0 +1,32 @@
+Сторонние компоненты, встроенные в программу «Календарь работ — ИИ на этом компьютере»
+========================================================================================
+
+llama.cpp (llama-server.exe и библиотеки ggml), выпуск b11815 — https://github.com/ggml-org/llama.cpp
+Файлы взяты без изменений с официальной страницы выпусков (GitHub, ggml-org/llama.cpp), контрольные суммы SHA-256 сверены с указанными на GitHub:
+  llama-b11815-bin-win-cpu-x64.zip     fcdde7412f5a4c6e644008893cba38587c4d1f3800074aa6a72614b8d6a92028
+  llama-b11815-bin-win-vulkan-x64.zip  ff71dad73d77c6673087f64fbb8f52ebddca3dc74e0cbfba09a06a231583f8a5
+Лицензия llama.cpp — MIT; в самих архивах лежит ещё LICENSE-LLVM-OpenMP (лицензия библиотеки OpenMP).
+
+----- Текст лицензии llama.cpp -----
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

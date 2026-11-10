@@ -1,0 +1,10 @@
+FROM caddy:2-alpine
+
+# iproute2 gives us `ip addr show <iface>` to auto-detect the host's LAN IP
+# at container startup — see caddy-entrypoint.sh.
+RUN apk add --no-cache iproute2
+
+COPY caddy-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

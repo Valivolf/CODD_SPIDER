@@ -1,0 +1,67 @@
+{
+	default_sni {$SERVER_ADDRESS:localhost}
+}
+
+{$SERVER_ADDRESS:localhost}, localhost, 127.0.0.1 {
+	tls internal
+
+	# Корневой сертификат этого Caddy — только публичная часть (root.crt; ключ рядом не отдаётся: путь жёстко
+	# переписан). Его один раз ставят на компьютер как доверенный — и браузер с антивирусом перестают
+	# спрашивать про «неизвестный сертификат» (лист живёт 12 часов и обновляется, промежуточный — 7 дней, а
+	# корневой не меняется). Ссылка «Сертификат сервера» — на странице входа.
+	handle /ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		header Content-Disposition "attachment; filename=caddy-root.crt"
+		file_server
+	}
+
+	# Сжатие ответов (JSON, HTML, JS, CSS ужимаются в 4–8 раз): страницы и списки грузятся заметно быстрее
+	encode zstd gzip
+
+	# Заголовки безопасности ответов: запрет определения типа файла браузером (nosniff), запрет показа страниц в чужих рамках (защита от clickjacking), отправка адреса
+	# источника только внутри своего сайта, запрет камеры/микрофона/геолокации (приложение ими не пользуется), HSTS (действует для доменных имён; для адреса-IP браузер его
+	# игнорирует). Серверный заголовок Server убран — версия программы не нужна посторонним. Content-Security-Policy ограничивает рамки, базовый адрес, формы и плагины;
+	# сценарии страниц содержат встроенный код и запросы к Яндекс.Картам, поэтому script-src здесь не сужается (см. документацию, раздел «Остаточные риски»).
+	# Рамка и политика ставятся по умолчанию («?» — только если заголовок ещё не задан): этот блок отложенный (из-за -Server) и сработал бы ПОСЛЕ исключения ниже и затёр его.
+	header {
+		X-Content-Type-Options "nosniff"
+		?X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Strict-Transport-Security "max-age=15552000"
+		?Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		-Server
+	}
+
+	# Файлы из карточек комплексов: PDF показывается встроенным просмотром браузера внутри страницы (рамка того же сайта), поэтому для адреса файлов рамка разрешена
+	# только своему сайту (SAMEORIGIN), а запрет плагинов object-src 'none' снят — с ним просмотр PDF в браузере блокируется. Остальное (nosniff, same-origin и т. д.) действует как везде.
+	@pointfiles path /api/point-files/*
+	header @pointfiles {
+		X-Frame-Options "SAMEORIGIN"
+		Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+	}
+
+	# Игры открываются внутри страницы «Игры» в iframe своего сайта.
+	handle /static/games/* {
+		header {
+			X-Frame-Options "SAMEORIGIN"
+			Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+			Cache-Control "no-store"
+		}
+		reverse_proxy 127.0.0.1:8000 {
+			header_down -Server
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8000 {
+			header_down -Server
+		}
+	}
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}

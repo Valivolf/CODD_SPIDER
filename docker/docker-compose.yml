@@ -1,0 +1,206 @@
+# Журналы контейнеров Docker по умолчанию растут без предела и могут занять весь диск сервера: каждому контейнеру — не больше 5 файлов по 20 МБ.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  lan-calendar:
+    logging: *default-logging
+    stop_grace_period: 30s          # дать приложению закончить запись в базу при остановке/обновлении
+    healthcheck:
+      # Приложение живо и база читается (GET /healthz); Docker отмечает контейнер unhealthy, установщик и «docker ps» это показывают.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 90s
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: lan-calendar:latest
+    container_name: lan-calendar
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true         # процесс в контейнере не может получить больше прав, чем у него есть (setuid и т. п.)
+    # Две сети: обычная (бот, робот, выход приложения к сервисам) и закрытая «ai_internal» — к языковой модели и распознаванию речи приложение ходит по ней.
+    networks:
+      - default
+      - ai_internal
+    # Bound to the host's loopback only — reachable from caddy (which shares
+    # the host's network via network_mode: host, see below) but not directly
+    # from the LAN, so every real request goes through HTTPS.
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # Время сервера — московское (даты «сегодня», имена копий базы, папки фото по дням, журнал). Другой пояс — APP_TZ в docker/.env.
+      TZ: "${APP_TZ:-Europe/Moscow}"
+    volumes:
+      - ../data:/app/data
+      - ../backups:/app/backups
+      # Сетевой диск с фото выездов (чтобы фото не занимали диск сервера). Диск монтируется на сервере в
+      # /mnt/lan-calendar-photos (инструкция — ИНСТРУКЦИЯ_обновление_сервера.txt), в .env задаётся PHOTOS_DIR=/app/photos.
+      # Пока PHOTOS_DIR не задан, папка просто пустая и не используется. rslave — чтобы диск, подключённый или
+      # перемонтированный уже после запуска контейнера, был виден внутри без перезапуска.
+      - type: bind
+        source: /mnt/lan-calendar-photos
+        target: /app/photos
+        bind:
+          propagation: rslave
+
+  codd-bot:
+    logging: *default-logging
+    # Тот же образ, что lan-calendar (bot/ теперь часть этого репозитория и
+    # копируется в тот же Dockerfile) - отдельного build-контекста не нужно,
+    # поэтому не требует своей сборки и не пытается тянуть образ из
+    # интернета на сервере без доступа к нему. lan-calendar собирается
+    # первым (свой build-блок ниже), codd-bot просто переиспользует тот же
+    # тег с другим command.
+    image: lan-calendar:latest
+    container_name: codd-bot
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "-m", "bot.main"]
+    # Тонкий VK-клиент без своей БД - всё через http://lan-calendar:8000
+    # (одна docker-сеть compose-проекта, имя сервиса резолвится DNS'ом).
+    env_file:
+      - path: ../bot.env
+        required: false
+    environment:
+      TZ: "${APP_TZ:-Europe/Moscow}"
+    depends_on:
+      - lan-calendar
+
+  yandex-robot:
+    logging: *default-logging
+    # Робот Яндекс.Конструктора карт (robot/): свой Chromium под входом в Яндекс,
+    # создаёт карты бригад кнопкой в календаре. Вход делается в окне календаря
+    # (Настройки → «Яндекс-аккаунт для карт»), профиль браузера лежит в томе robot_profile.
+    # Профиль compose «robot» — по умолчанию НЕ собирается и не запускается (сборка
+    # качает браузер ~400 МБ и требует интернет на сервере); включить:
+    #   docker compose --profile robot up -d --build yandex-robot
+    build:
+      context: ../robot
+      dockerfile: Dockerfile
+    image: lan-calendar-robot:latest
+    container_name: yandex-robot
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["robot"]
+    shm_size: "1gb"   # общая память для Chromium (иначе вкладки падают)
+    # Наружу порт не публикуется — к роботу ходит только приложение (lan-calendar) по
+    # имени сервиса; общий ключ — файл data/robot/.robot_api_key, который создаёт приложение.
+    volumes:
+      - robot_profile:/profile
+      - ../data/robot:/robot:ro
+      # Код робота берётся из папки проекта (robot/), а не из образа: он обновляется вместе с
+      # приложением (маленький архив), а тяжёлый образ с браузером везётся один раз.
+      - ../robot:/app:ro
+
+  llm:
+    logging: *default-logging
+    # Локальная языковая модель (llama.cpp): раскладывает голосовые итоги монтёров на «что сделано / причина / что нужно», отвечает на вопросы
+    # помощника и составляет план заполнения шаблонов. Профиль «ai» — по умолчанию НЕ запускается; ставится отдельным архивом lan-calendar-ai-*.tar
+    # (install.sh внутри). Образ сохранён под своим именем, чтобы compose не пытался скачать его из интернета на сервере без доступа к нему.
+    image: lan-calendar-llm:latest
+    pull_policy: never
+    container_name: lan-calendar-llm
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["ai"]
+    networks:
+      - ai_internal                  # сеть без выхода наружу: модель технически не может отправить данные за пределы сервера
+    # Файл модели лежит в ai-models/llm рядом с проектом (его кладёт установщик ИИ). Контекст делится на три «ячейки» (по 8192; подсказка помощника ≈ 3700 слов-«токенов», а с двумя прошлыми вопросами и ответом больше 4096): подсказки
+    # помощника, разбора голосовых и заполнения шаблонов кэшируются отдельно и не вытесняют друг друга. Другая модель — AI_LLM_FILE=файл.gguf docker compose …
+    command:
+      - "-m"
+      - "/models/llm/${AI_LLM_FILE:-qwen2.5-3b-instruct-q4_k_m.gguf}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "${AI_LLM_CTX:-24576}"
+      - "-np"
+      - "${AI_LLM_SLOTS:-3}"
+      - "-t"
+      - "${AI_THREADS:-4}"
+      - "-tb"
+      - "${AI_THREADS:-4}"
+      - "--cache-reuse"
+      - "256"
+      - "--no-webui"
+    environment:
+      TZ: "${APP_TZ:-Europe/Moscow}"
+    volumes:
+      - ../ai-models:/models:ro
+    mem_limit: ${AI_LLM_MEM:-8g}
+    # Потоки модели — AI_THREADS (установщик ИИ сам кладёт в docker/.env: ядер сервера минус 2). ЗАМЕРЕНО на рабочем сервере (6 ядер): на 6 потоках модель работает в
+    # 2–3 раза МЕДЛЕННЕЕ, чем на 4 (генерация 0,2–2,3 против 4,5–6,8 слов/с): потоки ждут друг друга, когда ядра нужны ещё приложению, роботу Яндекса и боту.
+    # Приоритет у модели понижен: календарь и бот не «подвисают».
+    cpu_shares: 256
+
+  asr:
+    logging: *default-logging
+    # Распознавание речи (faster-whisper): голосовое сообщение → текст. Профиль «ai» (см. выше); модель — в ai-models/whisper-*.
+    build:
+      context: ./asr
+      dockerfile: Dockerfile
+    image: lan-calendar-asr:latest
+    pull_policy: never
+    container_name: lan-calendar-asr
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["ai"]
+    networks:
+      - ai_internal                  # как у модели: без выхода наружу
+    environment:
+      TZ: "${APP_TZ:-Europe/Moscow}"
+      ASR_MODEL_DIR: /models/${AI_ASR_DIR:-whisper-large-v3-turbo}
+      ASR_THREADS: "${AI_THREADS:-4}"
+    volumes:
+      - ../ai-models:/models:ro
+    mem_limit: ${AI_ASR_MEM:-6g}
+    cpu_shares: 256                  # как у модели: календарь и бот важнее, при нехватке процессора они получают его первыми
+
+  caddy:
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: lan-calendar-caddy:latest
+    container_name: lan-calendar-caddy
+    restart: unless-stopped
+    # Host networking so the entrypoint can see the host's real interfaces
+    # (to auto-detect SERVER_ADDRESS off $NETWORK_INTERFACE) and so it can
+    # reach the app via 127.0.0.1 above. Linux only — this is why the app
+    # itself stays on the regular bridge network instead.
+    network_mode: host
+    depends_on:
+      - lan-calendar
+    env_file:
+      - path: ../.env
+        required: false
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ../.env:/env/.env
+
+networks:
+  default: {}
+  ai_internal:
+    internal: true                   # у контейнеров этой сети нет маршрута наружу (проверяется испытанием Т-12)
+
+volumes:
+  robot_profile:
+  caddy_data:
+  caddy_config:

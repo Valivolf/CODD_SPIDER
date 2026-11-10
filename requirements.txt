@@ -1,0 +1,29 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+pydantic>=2.8,<3
+pydantic-settings>=2.5,<3
+aiosqlite>=0.20,<1
+openpyxl>=3.1,<4
+XlsxWriter>=3.2,<4
+python-dateutil>=2.9,<3
+python-docx>=1.1,<2
+bcrypt>=4.1,<5
+PyJWT>=2.9,<3
+python-multipart>=0.0.12,<1
+jinja2>=3.1,<4
+
+# Сетевая папка Windows (SMB) для фото выездов: приложение подключается само, логин и пароль — в настройках
+# (app/services/photo_storage.py). Чистый Python, работает и в образе без интернета (образ собирается заранее).
+smbprotocol>=1.13,<2
+
+# Шифрование логинов/паролей комплексов, ФИО и телефонов персонала в базе (AES-256-GCM, app/core/field_crypto.py). Уже приезжает вместе
+# с smbprotocol, но нужна нам самим, поэтому указана явно.
+cryptography>=42
+
+# VK-бот для монтёров (bot/) - живёт в том же образе, что и сам календарь,
+# и запускается вторым сервисом (codd-bot) в docker-compose.yml с тем же
+# image и другим command, чтобы на новом сервере не требовался отдельный
+# build-контекст/скачивание образа из интернета для бота.
+httpx>=0.28,<1
+vkbottle>=4.0,<5
+python-dotenv>=1.0,<2
