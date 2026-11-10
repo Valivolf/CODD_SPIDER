@@ -4,8 +4,12 @@ __pycache__/
 .env
 .env.*
 !.env.example
+bot.env
+docker/.env
 data/
 backups/
+ai-models/
+offline-out/
 *.db
 *.db-wal
 *.db-shm
