@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html
 from pydantic import BaseModel
+from starlette.responses import HTMLResponse
 
 from app.core.deps import require_system
 from app.db.database import get_connection
@@ -33,9 +35,18 @@ async def summary():
     return await system_health.summary()
 
 
+@router.get("/api/system/docs", response_class=HTMLResponse, dependencies=[Depends(require_system)], include_in_schema=False)
+async def api_docs():
+    """Swagger UI со схемой, доступной только пользователям с правом admin.system."""
+    return get_swagger_ui_html(
+        openapi_url="/api/system/openapi",
+        title="Документация API — Календарь работ",
+    )
+
+
 @router.get("/api/system/openapi", dependencies=[Depends(require_system)], include_in_schema=False)
 async def openapi_schema(request: Request):
-    """Описание API (OpenAPI). Страницы /docs, /redoc и /openapi.json отключены: описание всех адресов сервера не должно быть доступно без входа; администратору оно отдаётся здесь."""
+    """Описание API (OpenAPI), доступное только пользователям с правом admin.system."""
     return request.app.openapi()
 
 

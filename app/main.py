@@ -236,7 +236,7 @@ def _install_error_handlers(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    # /docs, /redoc и /openapi.json отключены: схема всех адресов сервера не должна отдаваться без входа (администратору — /api/system/openapi)
+    # Публичные /docs, /redoc и /openapi.json отключены; закрытая Swagger UI доступна в /api/system/docs.
     app = FastAPI(title=settings.app_name, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_REQUEST_BODY_SIZE)
     app.middleware("http")(permission_guard)         # права роли на каждый адрес (app/core/permissions.py::RULES)
