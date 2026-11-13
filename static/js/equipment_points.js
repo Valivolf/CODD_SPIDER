@@ -116,7 +116,10 @@ async function eqPointCard(pointId) {
   let d; let panels = [];
   try {
     await eqLoadMeta();
-    [d, panels] = await Promise.all([Api.get('/api/equipment/points/' + encodeURIComponent(pointId)), Api.get('/api/solar-panels?linked=no')]);
+    [d, panels] = await Promise.all([
+      Api.get('/api/equipment/points/' + encodeURIComponent(pointId)),
+      can('warehouse.view') ? Api.get('/api/solar-panels?linked=no') : Promise.resolve([]),
+    ]);
   } catch (e) { alert(e.message); return; }
   const today = new Date().toISOString().slice(0, 10);
   modal(`<div class="flex flex-wrap items-start justify-between gap-2 mb-1">
@@ -125,29 +128,29 @@ async function eqPointCard(pointId) {
     <p class="text-xs text-slate-400 mb-3">${d.inventory_number ? 'инв. ' + esc(d.inventory_number) + ' · ' : ''}${esc(d.address || 'адрес не указан')}</p>
     <div class="rounded-xl border border-slate-700/50 bg-slate-800/30 p-3 mb-4 flex flex-wrap items-center gap-2">
       <span class="text-xs">☀ Солнечная панель: ${d.panel ? `<b>${esc(d.panel.panel_number)}</b>` : '<span class="text-slate-500">не привязана</span>'}</span>
-      ${d.panel ? `<button data-perm="warehouse.edit" id="pcUnlink" class="${btnGhost} !py-1 !px-2 text-xs">Отвязать</button>` : `
+      ${d.panel ? (can('warehouse.view') ? `<button data-perm="warehouse.edit" id="pcUnlink" class="${btnGhost} !py-1 !px-2 text-xs">Отвязать</button>` : '') : can('warehouse.view') ? `
         <select id="pcPanelSel" class="${fieldCls} !w-auto !py-1 text-xs">${eqOptions(panels, 'id', 'panel_number', '', 'Выберите свободную панель')}</select>
-        <button data-perm="warehouse.edit" id="pcLink" class="${btnGhost} !py-1 !px-2 text-xs">Привязать</button>`}
+        <button data-perm="warehouse.edit" id="pcLink" class="${btnGhost} !py-1 !px-2 text-xs">Привязать</button>` : ''}
     </div>
     <div class="flex items-center justify-between mb-2"><b class="text-sm">Установленное оборудование</b>
-      <span class="flex gap-1.5">${d.equipment.some((x) => x.category_kind === 'sim') ? '' : `<button data-perm="warehouse.edit" id="pcSimNew" class="${btnGhost} !py-1.5 !px-3 text-xs">💳 Указать SIM</button>`}
-      <button data-perm="warehouse.edit" id="pcAttach" class="${btnPrimary} !py-1.5 !px-3 text-xs">+ Установить</button></span></div>
+      <span class="flex gap-1.5">${d.equipment.some((x) => x.category_kind === 'sim') ? '' : `<button data-perm="warehouse.edit,equipment.move" id="pcSimNew" class="${btnGhost} !py-1.5 !px-3 text-xs">💳 Указать SIM</button>`}
+      <button data-perm="warehouse.edit,equipment.move" id="pcAttach" class="${btnPrimary} !py-1.5 !px-3 text-xs">+ Установить</button></span></div>
     <div class="space-y-1.5 mb-5">${d.equipment.map((it) => `<div class="rounded-xl border border-slate-700/50 bg-slate-800/30 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
       <span class="text-xs min-w-0"><span class="text-slate-400">${esc(it.category_name)}</span> · ${esc(it.model_name)}<br>
         <button data-pcitem="${it.id}" class="text-sm font-semibold text-indigo-300 hover:underline">№ ${esc(it.serial_number)}</button>
         <span class="text-slate-500">${it.installed_date ? ' · с ' + esc(fmtDate(it.installed_date)) : ''}${it.installed_by ? ' · ' + esc(it.installed_by) : ''}</span> ${eqStatusBadge(it)}</span>
       <span class="flex gap-1.5">${it.category_kind === 'sim'
-        ? `<button data-perm="warehouse.edit" data-pcsimreplace="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs">Заменить SIM</button>
-           <button data-perm="warehouse.edit" data-pcsimfix="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs" title="Номер был записан неверно">✏️ Номер</button>`
-        : `<button data-perm="warehouse.edit" data-pcreplace="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs">Заменить</button>`}
-        <button data-perm="warehouse.edit" data-pcdetach="${it.id}" class="${btnDanger} !py-1 !px-2 text-xs">Снять</button></span></div>`).join('')
+        ? `<button data-perm="warehouse.edit,equipment.move" data-pcsimreplace="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs">Заменить SIM</button>
+           <button data-perm="warehouse.edit,equipment.move" data-pcsimfix="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs" title="Номер был записан неверно">✏️ Номер</button>`
+        : `<button data-perm="warehouse.edit,equipment.move" data-pcreplace="${it.id}" class="${btnGhost} !py-1 !px-2 text-xs">Заменить</button>`}
+        <button data-perm="warehouse.edit,equipment.move" data-pcdetach="${it.id}" class="${btnDanger} !py-1 !px-2 text-xs">Снять</button></span></div>`).join('')
       || '<p class="text-sm text-slate-500">На комплексе нет оборудования</p>'}</div>
     <b class="text-sm block mb-2">История комплекса</b>
     <div class="space-y-1 max-h-52 overflow-auto mb-3">${d.history.map((h) => `<div class="rounded-lg border border-slate-700/40 bg-slate-800/20 px-2.5 py-1.5 text-xs">
       <span class="text-slate-500">${esc(fmtDate(h.event_date || h.ts))}</span> · <b>${esc(h.action_type)}</b>${h.serial_number ? ' · №' + esc(h.serial_number) : ''}${h.model_name ? ' ' + esc(h.model_name) : ''}${h.person_name ? ' · ' + esc(h.person_name) : ''}
       ${h.comment ? `<br><span class="text-slate-400">${esc(h.comment)}</span>` : ''}${h.performed_by ? `<br><span class="text-slate-600">${esc(h.performed_by)}</span>` : ''}</div>`).join('')
       || '<p class="text-xs text-slate-500">История пуста</p>'}</div>
-    <form id="pcNote" class="flex flex-wrap items-end gap-2 mb-4">
+    <form data-perm="warehouse.edit" id="pcNote" class="flex flex-wrap items-end gap-2 mb-4">
       <label class="${labelCls} flex-1 min-w-[160px]">Добавить запись<input name="comment" placeholder="Что было сделано" class="${fieldCls}"></label>
       <label class="${labelCls}">Дата<input type="date" name="date" value="${today}" class="${fieldCls}"></label>
       <button class="${btnGhost} !py-2 text-xs">Добавить</button></form>

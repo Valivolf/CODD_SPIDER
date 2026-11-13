@@ -144,13 +144,14 @@ STATE_DEFAULTS: dict = {
     "work_type": None, "point_id": None, "sim_change": None, "pending": None,
     "check_confirmed": False, "demontage_completed": False, "no_access": False, "repair_mode": False,
     "switched_to_repair": False, "sim_asked": False, "demontage_scope": None, "demontage_note": None,
-    "fault_text": None, "needs_text": None, "shot_text": None,         # shot_text — что расстреляно (комплекс расстреляли: «💥 Комплекс расстрелян» в «Замене оборудования»)
+    "fault_text": None, "needs_text": None, "shot_text": None, "consumables": [],
+    # shot_text — что расстреляно (комплекс расстреляли: «💥 Комплекс расстрелян» в «Замене оборудования»)
 }
 # Ключи сессии, которые принадлежат открытому комплексу и очищаются при выходе с него.
 TASK_SESSION_KEYS = (
     "task_id", "work_session_id", "photo_count", "comment", "pending_action", "draft", "photo_batch", "photo_batches", "report_chunks", "_photo_mut", "_photo_busy", "_saved",
-    "watch_token", "type_outcomes", "_eq_installed_tmp", "reason_ctx", "dem", "after_fault", "chat_prev_step", "chat_acked",
-    "finish_after_check", "type_tools", "finish_reason_pick",
+    "watch_token", "type_outcomes", "_eq_installed_tmp", "_consumables_catalog", "reason_ctx", "dem", "after_fault", "chat_prev_step", "chat_acked",
+    "finish_after_check", "type_tools", "finish_reason_pick", "consumables_item_id", "consumables_editing", "consumables_available",
     *STATE_DEFAULTS,
 )
 # Шаги, где бот ждёт ввод от монтёра: пока они идут, кнопки меню задания не срабатывают.
@@ -161,6 +162,8 @@ def _norm_state_value(key: str, value):
     default = STATE_DEFAULTS[key]
     if isinstance(default, bool):
         return bool(value)
+    if isinstance(default, list):
+        return [dict(row) for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     if key in ("sim_change", "pending", "demontage_scope"):
         return dict(value) if value else None
     return value if value not in (None, "") else None
@@ -1269,9 +1272,10 @@ async def _submit_and_finish(
             outcome=outcome,
             fault=_fault_for_report(session),
             needs=(session.get("needs_text") or "").strip() or None if status == "Не работает" else None,
+            consumables=[dict(row) for row in session.get("consumables", []) if isinstance(row, dict)],
         )
     except api_client.ApiError as e:
-        await send(peer_id, f"❌ Не удалось сохранить отчёт: {e.detail}", get_back_to_menu_keyboard())
+        await send(peer_id, f"❌ Не удалось сохранить отчёт: {e.detail}\nИсправьте расходники или попробуйте отправить отчёт ещё раз.", _menu(session))
         return
     work_session_id = session.get("work_session_id")
     if work_session_id:

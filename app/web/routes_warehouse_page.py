@@ -1,8 +1,5 @@
 """Dedicated /warehouse page — equipment/комплексы management, split off
-from the calendar and restricted to admins and the 'warehouse' role (see
-app/core/deps.py::require_warehouse). General calendar users never see
-this page; a 'warehouse'-role account never sees the calendar either —
-app.js's boot() redirects it here on login.
+from the calendar and restricted to warehouse or equipment-view roles.
 """
 from __future__ import annotations
 
@@ -22,7 +19,7 @@ templates.env.globals["asset_url"] = asset_url
 
 @router.get("/warehouse", response_class=HTMLResponse)
 async def warehouse_page(request: Request):
-    user, redirect = await page_user(request, "warehouse.view")
+    user, redirect = await page_user(request, "warehouse.view", "equipment.view")
     if redirect:
         return redirect
     settings = get_settings()

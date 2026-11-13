@@ -115,6 +115,7 @@ function apkRowHtml(p) {
         <button data-perm="reports.view,monitoring.view,calendar.view,notifications.view" data-journal="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="История выездов">🕘</button>
         <button data-perm="photos.view" data-point-photos="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="Фото по этому комплексу по дням">📷</button>
         <button data-perm="plans.edit,calendar.edit" data-plan="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="Добавить в план выезда">📌</button>
+        <a data-perm-show="warehouse.view,equipment.view" href="/warehouse?point=${encodeURIComponent(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-amber-500/15 hover:bg-amber-500/25 transition-colors shrink-0" title="Состав оборудования и история перемещений">📦</a>
         <button data-perm="points.view" data-edit="${esc(p.id)}" title="Карточка комплекса: просмотр и правка" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0">🗂</button>
       </span>
     </div>

@@ -104,10 +104,14 @@ def _stored(key: str, value: str) -> str:
     return field_crypto.encrypt(f"points.{key}", value) if key in _ENCRYPTED_KEYS else value
 
 # «Частично на складе» — подпись, а не статус (см. app/core/warehouse.py): точка
-# «На складе», у которой есть компонент, не лежащий на складе.
+# «На складе», у которой есть старый компонент или серийная единица вне склада.
 _STOCK_PARTIAL_SQL = (
-    f"(p.status = '{WAREHOUSE_STATUS}' and exists "
-    "(select 1 from point_components c where c.point_id = p.id and c.in_stock = 0)) as stock_partial"
+    f"""(p.status = '{WAREHOUSE_STATUS}' and (
+        exists (select 1 from point_components c where c.point_id = p.id and c.in_stock = 0)
+        or exists (select 1 from equipment e
+                   where (e.place = 'point' and e.point_id = p.id)
+                      or (e.removed_point_id = p.id and e.place in ('person', 'unknown')))
+    )) as stock_partial"""
 )
 
 _READ_SELECT = f"""
@@ -155,11 +159,31 @@ async def _attach_stock_details(items: list[dict[str, Any]]) -> list[dict[str, A
     if not ids:
         return items
     comps = await point_components_repository.list_for_points(ids)
+    serial_in: dict[str, list[str]] = {}
+    serial_out: dict[str, list[str]] = {}
+    async with get_connection() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" for _ in chunk)
+            cur = await conn.execute(
+                f"""select coalesce(e.removed_point_id, e.point_id), e.place, c.name, m.name, e.serial_number
+                    from equipment e
+                    join equipment_models m on m.id = e.model_id
+                    join equipment_categories c on c.id = m.category_id
+                    where coalesce(e.removed_point_id, e.point_id) in ({marks})
+                      and (e.place = 'stock' or e.place in ('point', 'person', 'unknown'))
+                    order by e.id""",
+                chunk,
+            )
+            for point_id, place, category, model, serial in await cur.fetchall():
+                label = f"{category} · {model} №{serial}"
+                target = serial_in if place == "stock" else serial_out
+                target.setdefault(point_id, []).append(label)
     for p in items:
         if p.get("stock_partial"):
             rows = comps.get(p["id"], [])
-            p["stock_in"] = [c["name"] for c in rows if c["in_stock"]]
-            p["stock_out"] = [c["name"] for c in rows if not c["in_stock"]]
+            p["stock_in"] = [c["name"] for c in rows if c["in_stock"]] + serial_in.get(p["id"], [])
+            p["stock_out"] = [c["name"] for c in rows if not c["in_stock"]] + serial_out.get(p["id"], [])
     return items
 
 

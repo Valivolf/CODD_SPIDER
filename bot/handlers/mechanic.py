@@ -17,6 +17,7 @@ from vkbottle_types import GroupEventType
 from bot.keyboards.mechanic_menu import get_power_source_keyboard
 from bot.service import equipment as eq_svc
 from bot.service import events
+from bot.service import consumables as consumables_svc
 from bot.service import mechanic as svc
 from bot.service import navigation
 from bot.service import views
@@ -66,6 +67,8 @@ TASK_ACTIONS = {
     "eq_catalog", "eq_cat", "eq_item", "eq_repl", "eq_rm", "eq_new", "eq_newc", "eq_pick", "eq_other",
     "eq_actpick", "eq_actnew", "eq_serial", "eq_suffix_ok", "eq_do", "eq_reason", "repair_sim_fix", "rsn_pick", "rsn_back", "sim_state_pick", "sim_state_back",
     "dem_scope", "dem_whole", "dem_whole_ok", "dem_parts", "dem_tog", "dem_other", "dem_parts_ok",
+    "consumables", "consumables_pick", "consumables_page", "consumables_edit_list", "consumables_edit_page",
+    "consumables_edit", "consumables_remove", "consumables_done", "consumables_back", "consumables_cancel_quantity",
 }
 
 
@@ -215,6 +218,8 @@ async def catch_all_message(message: Message, user: dict):
         await svc.chat_message(message, user, session)
     elif step == "awaiting_text":
         await svc.handle_draft_text(message, user, session)
+    elif step == "awaiting_consumable_quantity":
+        await consumables_svc.receive_quantity(message, user, session)
     elif step == "awaiting_photos":
         await svc.send(message.peer_id, "Жду фото — пришлите их или нажмите «Готово» / «Отмена».")
         await svc.reshow_wait(message.peer_id, session)
@@ -508,6 +513,76 @@ async def handle_repair_release_request(_event: dict, user: dict, payload: dict,
 @on_action("repair_menu_back")
 async def handle_repair_menu_back(_event: dict, user: dict, payload: dict, peer_id: int):
     await svc.repair_menu_back(peer_id, navigation.get_session(user["vk_id"]))
+
+
+@on_action("consumables")
+async def handle_consumables(_event: dict, user: dict, payload: dict, peer_id: int):
+    await consumables_svc.show(peer_id, user, _session(user))
+
+
+@on_action("consumables_pick")
+async def handle_consumables_pick(_event: dict, user: dict, payload: dict, peer_id: int):
+    try:
+        item_id = int(payload.get("item_id"))
+    except (TypeError, ValueError):
+        return
+    await consumables_svc.pick(peer_id, user, _session(user), item_id)
+
+
+@on_action("consumables_page")
+async def handle_consumables_page(_event: dict, user: dict, payload: dict, peer_id: int):
+    try:
+        page = int(payload.get("page"))
+    except (TypeError, ValueError):
+        page = 0
+    await consumables_svc.show(peer_id, user, _session(user), page)
+
+
+@on_action("consumables_edit_list")
+async def handle_consumables_edit_list(_event: dict, user: dict, payload: dict, peer_id: int):
+    await consumables_svc.show_editor(peer_id, user, _session(user))
+
+
+@on_action("consumables_edit_page")
+async def handle_consumables_edit_page(_event: dict, user: dict, payload: dict, peer_id: int):
+    try:
+        page = int(payload.get("page"))
+    except (TypeError, ValueError):
+        page = 0
+    await consumables_svc.show_editor(peer_id, user, _session(user), page)
+
+
+@on_action("consumables_edit")
+async def handle_consumables_edit(_event: dict, user: dict, payload: dict, peer_id: int):
+    try:
+        item_id = int(payload.get("item_id"))
+    except (TypeError, ValueError):
+        return
+    await consumables_svc.pick(peer_id, user, _session(user), item_id, editing=True)
+
+
+@on_action("consumables_remove")
+async def handle_consumables_remove(_event: dict, user: dict, payload: dict, peer_id: int):
+    try:
+        item_id = int(payload.get("item_id"))
+    except (TypeError, ValueError):
+        return
+    await consumables_svc.remove(peer_id, user, _session(user), item_id)
+
+
+@on_action("consumables_done")
+async def handle_consumables_done(_event: dict, user: dict, payload: dict, peer_id: int):
+    await consumables_svc.back_to_task(peer_id, _session(user))
+
+
+@on_action("consumables_back")
+async def handle_consumables_back(_event: dict, user: dict, payload: dict, peer_id: int):
+    await consumables_svc.back_to_task(peer_id, _session(user))
+
+
+@on_action("consumables_cancel_quantity")
+async def handle_consumables_cancel_quantity(_event: dict, user: dict, payload: dict, peer_id: int):
+    await consumables_svc.cancel_quantity(peer_id, user, _session(user))
 
 
 # ---------------------------------------------------------------- оборудование комплекса (монтёр) ----

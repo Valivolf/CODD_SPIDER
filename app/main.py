@@ -27,6 +27,7 @@ from app.api import (
     routes_ai,
     routes_apk_groups,
     routes_point_files,
+    routes_point_fields,
     routes_stat_counters,
     routes_ai_agents,
     routes_assistant,
@@ -37,6 +38,7 @@ from app.api import (
     routes_account_chat,
     routes_chat_broadcast,
     routes_crews,
+    routes_consumables,
     routes_demontage_requests,
     routes_encryption,
     routes_equipment,
@@ -270,6 +272,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_people.router)
     app.include_router(routes_points.router)
     app.include_router(routes_point_categories.router)
+    app.include_router(routes_point_fields.router)
     app.include_router(routes_point_plans.router)
     app.include_router(routes_apk_groups.router)
     app.include_router(routes_point_files.router)
@@ -282,6 +285,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_crews.router)
     app.include_router(routes_warehouse.router)
     app.include_router(routes_equipment.router)
+    app.include_router(routes_consumables.router)
     app.include_router(routes_equipment_import.router)
     app.include_router(routes_sklad_import.router)
     app.include_router(routes_solar_panels.router)

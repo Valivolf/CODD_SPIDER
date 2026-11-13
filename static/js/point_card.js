@@ -36,6 +36,8 @@
       .pc-row:last-child{border-bottom:0}
       .pc-lbl{color:rgb(var(--slate-400));font-size:12px;padding-top:2px}
       .pc-val{font-size:14px;overflow-wrap:anywhere;white-space:pre-wrap;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+      .pc-field-input{width:100%;min-width:0;border:1px solid rgb(var(--glass-border)/.4);border-radius:8px;padding:6px 8px;background:rgb(var(--bg-base)/.35);color:inherit;font:inherit}
+      .pc-field-input:disabled{opacity:.72}
       .pc-val.pc-empty,.pc-lock{color:rgb(var(--slate-400));font-style:italic}
       .pc-chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 10px;font-size:12px;border:1px solid rgb(var(--glass-border)/.35);white-space:nowrap}
       .pc-chip-ok{background:rgb(16 185 129/.14);border-color:rgb(16 185 129/.45)}
@@ -88,6 +90,8 @@
   const perms = () => ({
     edit: can('points.edit'), secrets: can('points.secrets'), network: can('points.network'),
     photoView: can('photos.view'), photoUp: can('photos.upload'), reports: canAny('reports.view', 'monitoring.view', 'calendar.view'),
+    accountingView: can('accounting.view'), accountingEdit: can('accounting.edit'),
+    equipment: canAny('equipment.view', 'warehouse.view'),
   });
 
   const lockRow = (label, right) => `<div class="pc-row"><div class="pc-lbl">${label}</div><div class="pc-val pc-lock" title="Нужно право «${esc(right)}»">🔒 Скрыто для вашей роли (нужно право «${esc(right)}»)</div></div>`;
@@ -117,6 +121,7 @@
     return `<div class="pc-title">${title}</div> ${badges}
       <span style="display:flex;flex-wrap:wrap;gap:6px;margin-left:6px">${chipsHtml(r)}</span>
       <span style="margin-left:auto;display:flex;flex-wrap:wrap;gap:8px">
+        ${mode === 'view' && !isNew && r.equipment ? `<a href="/warehouse?point=${encodeURIComponent(p.id)}" class="${btnGhost} !py-1.5 !px-3 text-sm" title="Открыть состав оборудования и историю перемещений">📦 Оборудование</a>` : ''}
         ${mode === 'view' && r.edit ? `<button type="button" id="pcEdit" class="${btnPrimary} !py-1.5 !px-4 text-sm" title="Изменить сведения о комплексе">✎ Редактировать</button>` : ''}
         ${mode === 'edit' ? `<button type="button" id="pcSave" class="${btnPrimary} !py-1.5 !px-4 text-sm">💾 Сохранить</button><button type="button" id="pcCancelEdit" class="${btnGhost} !py-1.5 !px-4 text-sm">${isNew ? 'Отмена' : 'Отменить правку'}</button>` : ''}
         <button type="button" id="pcClose" class="${btnGhost} !py-1.5 !px-4 text-sm" title="Закрыть карточку (Esc)">✕ Закрыть</button>
@@ -125,7 +130,7 @@
 
   // ---------- просмотр (только чтение) ----------
   function viewColumnsHtml() {
-    const { p, card, simLinks } = S;
+    const { p, card, simLinks, categoryFields = [], equipmentPoint, categoryFieldsError, equipmentError } = S;
     const r = perms();
     const main = `<div class="pc-panel"><h3>📋 Основное</h3>
       ${row('Номер', `<b>${esc(p.id)}</b>`)}
@@ -166,7 +171,31 @@
         ${r.reports ? `<button type="button" class="${btnGhost} !py-1.5 !px-3 text-xs" id="pcHistory">🕘 История выездов</button>` : ''}
       </div>
     </div>`;
-    return { left: main + fault + access, right: '' , links };
+    const showFields = r.accountingView || categoryFields.length || categoryFieldsError;
+    const fields = showFields ? `<div class="pc-panel"><h3>🧾 Учётные и дополнительные поля</h3>
+      ${categoryFieldsError ? `<p class="text-sm text-rose-400">${esc(categoryFieldsError)}</p>` : ''}
+      ${categoryFields.length ? `<form id="pcCategoryFields" class="space-y-2">
+        ${categoryFields.map((f) => {
+          const editable = f.accounting_only ? r.accountingEdit : r.edit;
+          const value = f.value || '';
+          const input = f.field_type === 'textarea'
+            ? `<textarea data-category-field="${f.id}" rows="2" class="pc-field-input" ${editable ? '' : 'disabled'}>${esc(value)}</textarea>`
+            : `<input data-category-field="${f.id}" type="${f.field_type === 'date' ? 'date' : f.field_type === 'number' || f.field_type === 'currency' ? 'number' : 'text'}" ${f.field_type === 'currency' || f.field_type === 'number' ? 'step="any"' : ''} value="${esc(value)}" class="pc-field-input" ${editable ? '' : 'disabled'}>`;
+          return `<label class="pc-row"><span class="pc-lbl">${esc(f.name)}${f.category_name ? ` · ${esc(f.category_name)}` : ''}</span><span class="pc-val">${input}</span></label>`;
+        }).join('')}
+        ${categoryFields.some((f) => f.accounting_only ? r.accountingEdit : r.edit) ? '<button class="pc-mini" type="submit">Сохранить поля</button>' : ''}
+      </form>` : '<p class="pc-lock">Поля для этого комплекса пока не заполнены.</p>'}
+    </div>` : '';
+    const equipment = r.equipment ? `<div class="pc-panel"><h3>🧰 Оборудование и история перемещений</h3>
+      ${equipmentError ? `<p class="text-sm text-rose-400">${esc(equipmentError)}</p>` : equipmentPoint ? `
+        <b class="text-xs">Сейчас на комплексе</b>
+        ${equipmentPoint.equipment.length ? equipmentPoint.equipment.map((item) => `<div class="pc-row"><span class="pc-lbl">${esc(item.category_name)} · ${esc(item.model_name)}</span><span class="pc-val">№ ${esc(item.serial_number)}${item.installed_date ? ` · с ${esc(fmtDate(item.installed_date))}` : ''}${item.installed_by ? ` · ${esc(item.installed_by)}` : ''}</span></div>`).join('') : '<p class="pc-lock">Оборудование не привязано.</p>'}
+        <b class="text-xs" style="display:block;margin-top:12px">История перемещений</b>
+        <div style="max-height:240px;overflow:auto">${equipmentPoint.history.map((h) => `<div class="pc-row"><span class="pc-lbl">${esc(fmtDate(h.event_date || h.ts))} · ${esc(h.action_type)}</span><span class="pc-val">${h.serial_number ? `№ ${esc(h.serial_number)}` : ''}${h.model_name ? ` · ${esc(h.model_name)}` : ''}${h.person_name ? ` · ${esc(h.person_name)}` : ''}${h.comment ? `<br>${esc(h.comment)}` : ''}${h.performed_by ? `<br><span class="pc-lbl">${esc(h.performed_by)}</span>` : ''}</span></div>`).join('') || '<p class="pc-lock">История пуста.</p>'}</div>
+        <a href="/warehouse?point=${encodeURIComponent(p.id)}" class="pc-mini" style="display:inline-block;margin-top:10px;text-decoration:none">Открыть складскую карточку →</a>
+      ` : '<p class="pc-lock">Данные оборудования не загружены.</p>'}
+    </div>` : '';
+    return { left: main + fault + access + fields + equipment, right: '' , links };
   }
 
   // ---------- правка ----------
@@ -307,6 +336,7 @@
     if ($c('#pcForm')) $c('#pcForm').onsubmit = (e) => { e.preventDefault(); saveCard(); };
     if ($c('#pcDelete')) $c('#pcDelete').onclick = deleteCard;
     if ($c('#pcHistory')) $c('#pcHistory').onclick = () => openVisitJournal(S.p.id);
+    if ($c('#pcCategoryFields')) $c('#pcCategoryFields').onsubmit = saveCategoryFields;
     S.el.querySelectorAll('[data-pc-copy]').forEach((b) => { b.onclick = () => copyText2(b.dataset.pcCopy, b); });
     S.el.querySelectorAll('[data-pc-reveal]').forEach((b) => {
       b.onclick = () => {
@@ -599,12 +629,37 @@
   }
 
   async function loadCardData() {
-    const [card, links] = await Promise.all([
+    const r = perms();
+    const [card, links, categoryFields, equipmentPoint] = await Promise.all([
       Api.get('/api/point-card?point_id=' + encodeURIComponent(S.p.id)).catch(() => ({ groups: [], plan: null, files: [] })),
       Api.get(`/api/points/${encodeURIComponent(S.p.id)}/sim-links`).catch(() => ({ linked: [] })),
+      Api.get('/api/point-category-fields/point/' + encodeURIComponent(S.p.id)).then((items) => ({ items, error: '' }), (e) => ({ items: [], error: e.message })),
+      r.equipment
+        ? Api.get('/api/equipment/points/' + encodeURIComponent(S.p.id)).then((item) => ({ item, error: '' }), (e) => ({ item: null, error: e.message }))
+        : Promise.resolve({ item: null, error: '' }),
     ]);
     S.card = card;
     S.simLinks = links.linked || [];
+    S.categoryFields = categoryFields.items;
+    S.categoryFieldsError = categoryFields.error;
+    S.equipmentPoint = equipmentPoint.item;
+    S.equipmentError = equipmentPoint.error;
+  }
+
+  async function saveCategoryFields(event) {
+    event.preventDefault();
+    const values = {};
+    $c('#pcCategoryFields').querySelectorAll('[data-category-field]:not(:disabled)').forEach((input) => {
+      values[input.dataset.categoryField] = input.value;
+    });
+    try {
+      S.categoryFields = await Api.put('/api/point-category-fields/point/' + encodeURIComponent(S.p.id), { values });
+      S.changed = true;
+      render();
+      toast('Поля сохранены', 'ok');
+    } catch (e) {
+      toast('Не удалось сохранить поля: ' + e.message, 'error');
+    }
   }
 
   // Точка входа. id = null — новый комплекс (сразу в режиме правки). opts.edit — открыть сразу на правку.
@@ -621,7 +676,7 @@
     el.id = 'pcOverlay';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Карточка комплекса');
-    S = { id, p: { ...EMPTY_POINT, ...(p || {}) }, isNew: !id, mode: (!id || (opts.edit && can('points.edit'))) ? 'edit' : 'view', card: { groups: [], plan: null, files: [] }, simLinks: [], photos: null, el, changed: false, prevOverflow: document.body.style.overflow };
+    S = { id, p: { ...EMPTY_POINT, ...(p || {}) }, isNew: !id, mode: (!id || (opts.edit && can('points.edit'))) ? 'edit' : 'view', card: { groups: [], plan: null, files: [] }, categoryFields: [], equipmentPoint: null, simLinks: [], photos: null, el, changed: false, prevOverflow: document.body.style.overflow };
     document.body.appendChild(el);
     document.body.style.overflow = 'hidden';
     document.body.classList.add('pc-open');

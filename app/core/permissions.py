@@ -54,6 +54,12 @@ CATALOG: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Склад", [
         ("warehouse.view", "Видеть раздел «Склад»", "оборудование, SIM, солнечные панели"),
         ("warehouse.edit", "Операции со складом", "приём, выдача, установка, снятие, статусы, импорт"),
+        ("equipment.view", "Видеть оборудование на комплексах и историю его перемещений", ""),
+        ("equipment.move", "Менять привязку оборудования к комплексам", ""),
+    ]),
+    ("Бухгалтерия", [
+        ("accounting.view", "Видеть бухгалтерские поля в карточках АПК", ""),
+        ("accounting.edit", "Менять бухгалтерские поля в карточках АПК", ""),
     ]),
     ("Отсутствия", [
         ("absences.view", "Видеть раздел «Отсутствия»", ""),
@@ -88,6 +94,10 @@ IMPLIES: dict[str, tuple[str, ...]] = {
     "chat.broadcast": ("chat.use", "chat.view"),
     "notifications.resolve": ("notifications.view",),
     "warehouse.edit": ("warehouse.view",),
+    "warehouse.view": ("equipment.view",),
+    "equipment.move": ("equipment.view",),
+    "monitoring.view": ("equipment.view",),
+    "accounting.edit": ("accounting.view",),
     "absences.edit": ("absences.view",),
     # меню «Администрирование», настройки, копия базы, журнал и т. д. находятся в шапке главной страницы — без права на неё до них не добраться
     "admin.users": ("calendar.view",), "admin.settings": ("calendar.view",), "admin.system": ("calendar.view",), "admin.backup": ("calendar.view",),
@@ -101,7 +111,7 @@ CORE_READ: frozenset = frozenset({
 
 # Страницы: адрес → право для входа (в порядке предпочтения при выборе «стартовой» страницы)
 PAGES: list[tuple[str, tuple]] = [
-    ("/", ("calendar.view",)), ("/apk", ("points.view", "check.use")), ("/warehouse", ("warehouse.view",)), ("/reports", ("reports.view",)), ("/monitoring", ("monitoring.view",)),
+    ("/", ("calendar.view",)), ("/apk", ("points.view", "check.use")), ("/warehouse", ("warehouse.view", "equipment.view")), ("/reports", ("reports.view",)), ("/monitoring", ("monitoring.view",)),
     ("/notifications", ("notifications.view",)), ("/stats", ("stats.view",)), ("/absences", ("absences.view",)), ("/assistant", ("assistant.use",)),
 ]
 
@@ -131,6 +141,8 @@ BUILTIN: dict[str, dict] = {
     "user": {"name": "Оператор", "description": "Рабочая роль диспетчера: календарь, комплексы (с логинами и паролями), отчёты, мониторинг, уведомления, чат, статистика, отсутствия. Без администрирования и склада.", "perms": _OPERATOR},
     "warehouse": {"name": "Склад", "description": "Учёт оборудования: страница «Склад», операции со складом, смена статуса комплекса при приёме и выдаче; IP комплексов видит, пароли — нет.",
                   "perms": ("warehouse.view", "warehouse.edit", "points.network", "assistant.use")},
+    "accounting": {"name": "Бухгалтерия", "description": "Список АПК, документы, бухгалтерские поля и состав оборудования с историей перемещений; без доступа к паролям и сетевым настройкам.",
+                   "perms": ("points.view", "accounting.view", "accounting.edit", "equipment.view", "equipment.move")},
     "viewer": {"name": "Только просмотр", "description": "Читает календарь, комплексы (без IP и паролей), отчёты, мониторинг, фото, уведомления и чат; ничего не меняет.",
                "perms": ("calendar.view", "points.view", "points.export", "check.use", "reports.view", "monitoring.view", "photos.view", "chat.view", "notifications.view", "absences.view", "assistant.use")},
     "absences": {"name": "Отсутствия", "description": "Только раздел «Отсутствия»: смотреть и вносить отсутствия сотрудников; остального не видит.", "perms": ("absences.view", "absences.edit", "assistant.use")},
@@ -140,7 +152,7 @@ BUILTIN_KEYS = tuple(BUILTIN)
 # Права, появившиеся ПОСЛЕ первого выпуска ролей. Строки встроенных ролей в базе записаны при первом запуске и сами не обновляются, поэтому при запуске каждое такое право один раз
 # добавляется тем встроенным ролям, у которых оно есть по умолчанию (roles_repository.ensure): иначе на уже работающем сервере «Оператор» его не получит. Новое право, которое нужно
 # выдать встроенным ролям на действующих серверах, дописывается сюда в конец. Администратор потом может убрать его у роли — повторно оно не возвращается.
-NEW_RIGHTS: tuple = ("stats.counters", "chat.broadcast")
+NEW_RIGHTS: tuple = ("stats.counters", "chat.broadcast", "equipment.view", "equipment.move")
 
 
 def default_perms(role_key: str) -> frozenset:
@@ -240,6 +252,8 @@ RULES: list[tuple[Optional[set], re.Pattern, tuple, str]] = [
     (W, _R(r"^/api/points/assign$"), ("calendar.edit", "plans.edit"), "комплексы → задания бригады"),
     (W, _R(r"^/api/points/[^/]+/status$"), ("points.edit", "warehouse.edit"), "статус комплекса"),
     (G, _R(r"^/api/points/duplicates$"), ("points.edit",), "дубли комплексов"),
+    (G, _R(r"^/api/point-category-fields/point/"), ("points.view", "points.edit", "accounting.view", "accounting.edit"), "дополнительные поля комплекса: чтение"),
+    (W, _R(r"^/api/point-category-fields/point/"), ("points.edit", "accounting.edit"), "дополнительные поля комплекса: изменения"),
     (G, _R(r"^/api/points(/|$)"), (CORE,), "справочник комплексов"),
     (W, _R(r"^/api/points(/|$)"), ("points.edit",), "комплексы: изменения"),
     (G, _R(r"^/api/(point-categories|point-statuses|work-types)(/|$)"), (CORE,), "справочники"),
@@ -294,7 +308,11 @@ RULES: list[tuple[Optional[set], re.Pattern, tuple, str]] = [
     (G, _R(r"^/api/live-maps(/|$)"), ("maps.manage", "points.view"), "живые карты: чтение"),
     (W, _R(r"^/api/live-maps(/|$)"), ("maps.manage",), "живые карты"),
     # склад
-    (G, _R(r"^/api/(equipment|warehouse|solar-panels)(/|$)"), ("warehouse.view",), "склад: чтение"),
+    (G, _R(r"^/api/consumables(/|$)"), ("warehouse.view",), "расходные материалы: чтение"),
+    (W, _R(r"^/api/consumables(/|$)"), ("warehouse.edit",), "расходные материалы: изменения"),
+    (G, _R(r"^/api/equipment(/|$)"), ("warehouse.view", "equipment.view"), "оборудование: чтение"),
+    (G, _R(r"^/api/(warehouse|solar-panels)(/|$)"), ("warehouse.view",), "склад: чтение"),
+    (W, _R(r"^/api/equipment/points/[^/]+/(attach|replace|detach/[^/]+|sim/(replace|fix))$"), ("warehouse.edit", "equipment.move"), "перемещение оборудования на комплексах"),
     (W, _R(r"^/api/equipment/export/"), ("warehouse.view",), "выгрузка склада в Excel (данные не меняются)"),
     (W, _R(r"^/api/(equipment|warehouse|solar-panels)(/|$)"), ("warehouse.edit",), "склад: операции"),
     # ИИ
