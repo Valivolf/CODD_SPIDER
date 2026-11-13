@@ -489,6 +489,7 @@ async def init_db() -> None:
             )"""
         )
         await conn.execute("create index if not exists idx_point_category_fields_category on point_category_fields(category_id, sort_order)")
+        await conn.execute("update point_category_fields set accounting_only = 0 where category_id is not null and accounting_only != 0")
         await conn.execute(
             """create table if not exists point_category_field_values (
                 point_id text not null references points(id) on delete cascade on update cascade,

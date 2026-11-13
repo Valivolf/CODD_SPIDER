@@ -111,7 +111,7 @@ CORE_READ: frozenset = frozenset({
 
 # Страницы: адрес → право для входа (в порядке предпочтения при выборе «стартовой» страницы)
 PAGES: list[tuple[str, tuple]] = [
-    ("/", ("calendar.view",)), ("/apk", ("points.view", "check.use")), ("/warehouse", ("warehouse.view", "equipment.view")), ("/reports", ("reports.view",)), ("/monitoring", ("monitoring.view",)),
+    ("/", ("calendar.view",)), ("/accounting", ("accounting.view",)), ("/apk", ("points.view", "check.use")), ("/warehouse", ("warehouse.view", "equipment.view")), ("/reports", ("reports.view",)), ("/monitoring", ("monitoring.view",)),
     ("/notifications", ("notifications.view",)), ("/stats", ("stats.view",)), ("/absences", ("absences.view",)), ("/assistant", ("assistant.use",)),
 ]
 
@@ -142,7 +142,7 @@ BUILTIN: dict[str, dict] = {
     "warehouse": {"name": "Склад", "description": "Учёт оборудования: страница «Склад», операции со складом, смена статуса комплекса при приёме и выдаче; IP комплексов видит, пароли — нет.",
                   "perms": ("warehouse.view", "warehouse.edit", "points.network", "assistant.use")},
     "accounting": {"name": "Бухгалтерия", "description": "Список АПК, документы, бухгалтерские поля и состав оборудования с историей перемещений; без доступа к паролям и сетевым настройкам.",
-                   "perms": ("points.view", "accounting.view", "accounting.edit", "equipment.view", "equipment.move")},
+                   "perms": ("points.view", "accounting.view", "accounting.edit", "warehouse.view", "equipment.move", "photos.view")},
     "viewer": {"name": "Только просмотр", "description": "Читает календарь, комплексы (без IP и паролей), отчёты, мониторинг, фото, уведомления и чат; ничего не меняет.",
                "perms": ("calendar.view", "points.view", "points.export", "check.use", "reports.view", "monitoring.view", "photos.view", "chat.view", "notifications.view", "absences.view", "assistant.use")},
     "absences": {"name": "Отсутствия", "description": "Только раздел «Отсутствия»: смотреть и вносить отсутствия сотрудников; остального не видит.", "perms": ("absences.view", "absences.edit", "assistant.use")},
@@ -152,7 +152,7 @@ BUILTIN_KEYS = tuple(BUILTIN)
 # Права, появившиеся ПОСЛЕ первого выпуска ролей. Строки встроенных ролей в базе записаны при первом запуске и сами не обновляются, поэтому при запуске каждое такое право один раз
 # добавляется тем встроенным ролям, у которых оно есть по умолчанию (roles_repository.ensure): иначе на уже работающем сервере «Оператор» его не получит. Новое право, которое нужно
 # выдать встроенным ролям на действующих серверах, дописывается сюда в конец. Администратор потом может убрать его у роли — повторно оно не возвращается.
-NEW_RIGHTS: tuple = ("stats.counters", "chat.broadcast", "equipment.view", "equipment.move")
+NEW_RIGHTS: tuple = ("stats.counters", "chat.broadcast", "equipment.view", "equipment.move", "warehouse.view", "photos.view")
 
 
 def default_perms(role_key: str) -> frozenset:
@@ -252,6 +252,7 @@ RULES: list[tuple[Optional[set], re.Pattern, tuple, str]] = [
     (W, _R(r"^/api/points/assign$"), ("calendar.edit", "plans.edit"), "комплексы → задания бригады"),
     (W, _R(r"^/api/points/[^/]+/status$"), ("points.edit", "warehouse.edit"), "статус комплекса"),
     (G, _R(r"^/api/points/duplicates$"), ("points.edit",), "дубли комплексов"),
+    (G, _R(r"^/api/accounting/points$"), ("accounting.view",), "список комплексов для бухгалтерии"),
     (G, _R(r"^/api/point-category-fields/point/"), ("points.view", "points.edit", "accounting.view", "accounting.edit"), "дополнительные поля комплекса: чтение"),
     (W, _R(r"^/api/point-category-fields/point/"), ("points.edit", "accounting.edit"), "дополнительные поля комплекса: изменения"),
     (G, _R(r"^/api/points(/|$)"), (CORE,), "справочник комплексов"),
@@ -261,7 +262,9 @@ RULES: list[tuple[Optional[set], re.Pattern, tuple, str]] = [
     (G, _R(r"^/api/point-plans(/|$)"), (CORE,), "планы выездов"),
     (W, _R(r"^/api/point-plans(/|$)"), ("plans.edit", "calendar.edit"), "планы выездов: изменения"),
     (G, _R(r"^/api/(point-card|point-files)(/|$)"), ("points.view", "calendar.view", "check.use"), "карточка комплекса и файлы при комплексе: чтение"),
-    (W, _R(r"^/api/point-files(/|$)"), ("points.edit",), "файлы при комплексе: загрузка и удаление"),
+    ({"DELETE"}, _R(r"^/api/point-files/\d+$"), ("points.edit",), "удаление файлов комплекса"),
+    ({"POST"}, _R(r"^/api/point-files$"), ("points.edit", "accounting.edit"), "загрузка файла комплекса"),
+    (W, _R(r"^/api/point-files(/|$)"), ("points.edit",), "изменение файлов при комплексе"),
     (G, _R(r"^/api/apk-groups(/|$)"), ("points.view",), "подгруппы"),
     (W, _R(r"^/api/apk-groups(/|$)"), ("points.edit",), "подгруппы: изменения"),
     (G, _R(r"^/api/excel/(plan|yandex)(/|-points|$)"), ("calendar.print", "maps.manage"), "выгрузки для календаря и карт"),

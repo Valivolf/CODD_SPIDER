@@ -29,7 +29,7 @@ function matchesQuery(query, ...fields) {
 // actually reach (e.g. warehouse never sees this, apk.js has no
 // 'warehouse' case), but every page that can be opened by 'viewer' needs
 // this one label in common.
-const ROLE_DISPLAY_LABEL = { admin: 'админ', user: 'оператор', warehouse: 'склад', viewer: 'только просмотр', absences: 'отсутствия' };
+const ROLE_DISPLAY_LABEL = { admin: 'админ', user: 'оператор', warehouse: 'склад', accounting: 'бухгалтерия', viewer: 'только просмотр', absences: 'отсутствия' };
 
 // ---------- права роли ----------
 // Права приходят с /api/auth/me (CURRENT_USER.permissions; у администратора ['*']). Скрытие кнопок и разделов — удобство: запрет на сервере действует всегда
@@ -43,7 +43,7 @@ function can(key) {
 function canAny(...keys) { return keys.some((k) => can(k)); }
 function userRoleLabel(u) { return (u && (u.role_name || ROLE_DISPLAY_LABEL[u.role] || u.role)) || ''; }
 // Страницы по порядку предпочтения — как на сервере (app/core/permissions.py::PAGES): куда вести человека, если «своей» страницы у него нет
-const PAGE_ORDER = [['/', 'calendar.view', 'Календарь'], ['/apk', ['points.view', 'check.use'], 'Все АПК'], ['/warehouse', 'warehouse.view', 'Склад'], ['/reports', 'reports.view', 'Отчёты'],
+const PAGE_ORDER = [['/', 'calendar.view', 'Календарь'], ['/accounting', 'accounting.view', 'Комплексы бухгалтерии'], ['/apk', ['points.view', 'check.use'], 'Все АПК'], ['/warehouse', 'warehouse.view', 'Склад'], ['/reports', 'reports.view', 'Отчёты'],
   ['/monitoring', 'monitoring.view', 'Мониторинг'], ['/notifications', 'notifications.view', 'Уведомления'], ['/stats', 'stats.view', 'Статистика'], ['/absences', 'absences.view', 'Отсутствия'],
   ['/assistant', 'assistant.use', 'Помощник']];
 function firstPageFor(exceptPath) {

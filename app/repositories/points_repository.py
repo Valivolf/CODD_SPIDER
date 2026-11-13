@@ -379,6 +379,107 @@ async def search_points(
     return items, total
 
 
+async def search_accounting_points(search: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    """Минимальный список комплексов для отдельной страницы бухгалтерии.
+
+    Поиск учитывает общие сведения и значения всех дополнительных полей, но
+    в ответ включаются только поля, закреплённые за бухгалтерией.
+    """
+    where: list[str] = []
+    params: list[Any] = []
+    words = [word for word in search.split() if word]
+    for word in words:
+        like = f"%{word}%"
+        compact = compact_name(word)
+        branches = [
+            "pylower(p.id) like pylower(?)",
+            "pylower(coalesce(p.inventory_number, '')) like pylower(?)",
+            "pylower(coalesce(p.address, '')) like pylower(?)",
+            "pylower(coalesce(p.description, '')) like pylower(?)",
+            "pylower(coalesce(p.status, '')) like pylower(?)",
+            "pylower(coalesce(p.notes, '')) like pylower(?)",
+            "pylower(coalesce(p.verification_valid_until, '')) like pylower(?)",
+            "pylower(coalesce(p.power_source, '')) like pylower(?)",
+            "pylower(coalesce(p.fault_reason, '')) like pylower(?)",
+            "pylower(coalesce(p.fault_need, '')) like pylower(?)",
+        ]
+        params.extend([like] * len(branches))
+        if compact:
+            branches.append(
+                "pycompact(coalesce(p.id, '') || ' ' || coalesce(p.inventory_number, '') || ' ' "
+                "|| coalesce(p.address, '') || ' ' || coalesce(p.description, '') || ' ' "
+                "|| coalesce(p.status, '') || ' ' || coalesce(p.lat, '') || ' ' || coalesce(p.lon, '') || ' ' "
+                "|| coalesce(p.notes, '') || ' ' || coalesce(p.verification_valid_until, '') || ' ' "
+                "|| coalesce(p.power_source, '') || ' ' || coalesce(p.fault_reason, '') || ' ' "
+                "|| coalesce(p.fault_need, '')) like ?"
+            )
+            params.append(f"%{compact}%")
+        value_match = "pylower(v.value) like pylower(?)"
+        value_params = [like]
+        if compact:
+            value_match = f"({value_match} or pycompact(v.value) like ?)"
+            value_params.append(f"%{compact}%")
+        branches.append(
+            f"""exists (
+                select 1
+                from point_category_field_values v
+                join point_category_fields f on f.id = v.field_id
+                where v.point_id = p.id
+                  and (f.category_id is null or f.category_id = p.category_id)
+                  and {value_match}
+            )"""
+        )
+        params.extend(value_params)
+        where.append("(" + " or ".join(branches) + ")")
+
+    where_sql = (" where " + " and ".join(where)) if where else ""
+    async with get_connection() as conn:
+        cur = await conn.execute(
+            "select count(*) from points p" + where_sql,
+            params,
+        )
+        (total,) = await cur.fetchone()
+        cur = await conn.execute(
+            "select p.id, p.inventory_number, p.status, p.address, p.lat, p.lon, p.category_id, "
+            f"{_STOCK_PARTIAL_SQL} "
+            "from points p" + where_sql + " order by p.id limit ? offset ?",
+            [*params, limit, offset],
+        )
+        rows = await cur.fetchall()
+        items = [
+            {
+                "id": row[0],
+                "inventory_number": row[1] or "",
+                "status": row[2] or "",
+                "address": row[3] or "",
+                "lat": row[4] or "",
+                "lon": row[5] or "",
+                "stock_partial": bool(row[7]),
+                "accounting_fields": [],
+            }
+            for row in rows
+        ]
+        if items:
+            point_ids = [item["id"] for item in items]
+            placeholders = ", ".join("?" for _ in point_ids)
+            cur = await conn.execute(
+                f"""select p.id, f.id, f.name, f.field_type, coalesce(v.value, '')
+                    from points p
+                    join point_category_fields f on f.accounting_only = 1
+                      and (f.category_id is null or f.category_id = p.category_id)
+                    left join point_category_field_values v on v.point_id = p.id and v.field_id = f.id
+                    where p.id in ({placeholders})
+                    order by f.category_id is not null, f.sort_order, f.name collate nocase""",
+                point_ids,
+            )
+            by_id = {item["id"]: item for item in items}
+            for point_id, field_id, name, field_type, value in await cur.fetchall():
+                by_id[point_id]["accounting_fields"].append(
+                    {"id": field_id, "name": name, "field_type": field_type, "value": value or ""}
+                )
+    return items, total
+
+
 async def _resolve_category_id(conn, data: dict[str, Any]) -> Optional[int]:
     if "category_name" in data or "category_color" in data:
         return await point_categories_repository.get_or_create(

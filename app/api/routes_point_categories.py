@@ -27,7 +27,6 @@ class CategoryFieldIn(BaseModel):
     category_id: int | None = None
     name: str
     field_type: str = "text"
-    accounting_only: bool = False
 
 
 def _validate_field(payload: CategoryFieldIn) -> tuple[str, str]:
@@ -54,7 +53,7 @@ async def create_category_field(payload: CategoryFieldIn):
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
     try:
-        return await fields_repo.create_field(payload.category_id, name, field_type, payload.accounting_only)
+        return await fields_repo.create_field(payload.category_id, name, field_type, False)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
@@ -65,10 +64,12 @@ async def update_category_field(field_id: int, payload: CategoryFieldIn):
     current = await fields_repo.get_field(field_id)
     if current is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Поле не найдено")
+    if current["accounting_only"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Бухгалтерские поля нельзя менять в конструкторе категорий")
     if payload.category_id != current["category_id"]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Категорию существующего поля менять нельзя")
     try:
-        await fields_repo.update_field(field_id, name, field_type, payload.accounting_only)
+        await fields_repo.update_field(field_id, name, field_type, False)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return await fields_repo.get_field(field_id)
@@ -76,6 +77,11 @@ async def update_category_field(field_id: int, payload: CategoryFieldIn):
 
 @router.delete("/fields/{field_id}")
 async def delete_category_field(field_id: int):
+    current = await fields_repo.get_field(field_id)
+    if current is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Поле не найдено")
+    if current["accounting_only"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Бухгалтерские поля нельзя удалять в конструкторе категорий")
     if not await fields_repo.delete_field(field_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Поле не найдено")
     return {"ok": True}

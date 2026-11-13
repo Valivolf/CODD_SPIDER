@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import (
+    routes_accounting,
     routes_absences,
     routes_access_issues,
     routes_auth,
@@ -93,6 +94,7 @@ from app.services import apk_group_auto, forms_auto, security_log, system_health
 from app.services.backup_service import daily_backup_loop
 from app.services.point_health_service import point_health_loop
 from app.web import (
+    routes_accounting_page,
     routes_absences_page,
     routes_apk_page,
     routes_assistant_page,
@@ -249,6 +251,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_system.router)
     app.include_router(routes_security.router)
     app.include_router(routes_pages.router)
+    app.include_router(routes_accounting_page.router)
     app.include_router(routes_warehouse_page.router)
     app.include_router(routes_apk_page.router)
     app.include_router(routes_absences_page.router)
@@ -260,6 +263,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_notifications_page.router)
     app.include_router(routes_plan_print.router)
     app.include_router(routes_auth.router)
+    app.include_router(routes_accounting.router)
     app.include_router(routes_users.router)
     app.include_router(routes_games.router)
     app.include_router(routes_games.admin_router)

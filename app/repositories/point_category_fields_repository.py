@@ -55,6 +55,7 @@ async def create_field(
     category_id: Optional[int], name: str, field_type: str, accounting_only: bool
 ) -> dict[str, Any]:
     name = " ".join(name.split())
+    accounting_only = bool(accounting_only and category_id is None)
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     async with get_connection() as conn:
         cur = await conn.execute(
@@ -89,6 +90,7 @@ async def update_field(
         if not row:
             return False
         category_id = row[0]
+        accounting_only = bool(accounting_only and category_id is None)
         cur = await conn.execute(
             "select id from point_category_fields where category_id is ? and pylower(name) = pylower(?) and id != ?",
             (category_id, name, field_id),

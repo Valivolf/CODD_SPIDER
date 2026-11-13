@@ -938,12 +938,11 @@ async function categoryFieldsForm(category) {
     catch (e) { alert('Не удалось загрузить поля категории: ' + e.message); return; }
     const specific = fields.filter((f) => f.category_id === category.id);
     modal(`<h2 class="font-display text-lg font-bold mb-1">Поля категории «${esc(category.name)}»</h2>
-      <p class="text-xs text-slate-400 mb-3">Общие бухгалтерские поля доступны для всех категорий. Для этой категории можно добавить свои поля и отметить те, что относятся к бухгалтерии.</p>
+      <p class="text-xs text-slate-400 mb-3">Дополнительные поля категории относятся к основной информации о комплексе. Бухгалтерские поля ведутся отдельно.</p>
       <div id="catFieldList" class="space-y-2 max-h-[360px] overflow-auto pr-1 mb-4">
         ${specific.map((f) => `<div class="rounded-xl border border-slate-700/50 bg-slate-800/30 p-2.5 flex flex-wrap items-center gap-2">
           <input type="text" data-pcf-name="${f.id}" value="${esc(f.name)}" class="${fieldCls} flex-1 !py-1.5 min-w-[100px]">
           <select data-pcf-type="${f.id}" class="${fieldCls} !w-auto !py-1.5">${fieldTypes.map(([key, label]) => `<option value="${key}" ${f.field_type === key ? 'selected' : ''}>${label}</option>`).join('')}</select>
-          <label class="text-xs text-slate-400 flex items-center gap-1"><input type="checkbox" data-pcf-accounting="${f.id}" ${f.accounting_only ? 'checked' : ''}>Бухгалтерии</label>
           <button type="button" data-pcf-save="${f.id}" class="${btnGhost} !py-1.5 !px-2.5 text-xs">Сохранить</button>
           <button type="button" data-pcf-del="${f.id}" class="${btnDanger} !py-1.5 !px-2.5 text-xs">Удалить</button>
         </div>`).join('') || '<p class="text-sm text-slate-500">Дополнительных полей для категории нет</p>'}
@@ -951,7 +950,6 @@ async function categoryFieldsForm(category) {
       <form id="catFieldAdd" class="flex flex-wrap items-center gap-2">
         <input name="name" required maxlength="80" placeholder="Название нового поля" class="${fieldCls} flex-1 min-w-[160px]">
         <select name="field_type" class="${fieldCls} !w-auto">${fieldTypes.map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select>
-        <label class="text-xs text-slate-400 flex items-center gap-1"><input type="checkbox" name="accounting_only">Бухгалтерии</label>
         <button class="${btnPrimary}">Добавить поле</button>
       </form>
       <div class="flex items-center gap-2 pt-4"><button type="button" class="cancel ${btnGhost}">Закрыть</button></div>`);
@@ -962,7 +960,6 @@ async function categoryFieldsForm(category) {
           await Api.put(`/api/point-categories/fields/${id}`, {
             category_id: category.id, name: $(`[data-pcf-name="${id}"]`).value.trim(),
             field_type: $(`[data-pcf-type="${id}"]`).value,
-            accounting_only: $(`[data-pcf-accounting="${id}"]`).checked,
           });
           await render();
         } catch (e) { alert(e.message); }
@@ -981,7 +978,6 @@ async function categoryFieldsForm(category) {
       try {
         await Api.post('/api/point-categories/fields', {
           category_id: category.id, name: f.name.value.trim(), field_type: f.field_type.value,
-          accounting_only: f.accounting_only.checked,
         });
         await render();
       } catch (err) { alert(err.message); }
