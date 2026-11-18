@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from app.core import equipment as eq
-from app.core.deps import require_warehouse, require_warehouse_edit
+from app.core import permissions as P
+from app.core.deps import require_equipment_move, require_equipment_view, require_warehouse_edit
 from app.models.user import UserOut
 from app.repositories import equipment_repository as repo
 from app.repositories import people_repository, point_links_repository, points_repository, solar_panels_repository
@@ -19,7 +20,7 @@ from app.services import equipment_service as svc
 from app.services import equipment_xlsx as xlsx
 from app.db.database import get_connection
 
-router = APIRouter(prefix="/api/equipment", tags=["equipment"], dependencies=[Depends(require_warehouse)])
+router = APIRouter(prefix="/api/equipment", tags=["equipment"], dependencies=[Depends(require_equipment_view)])
 
 _MAX_LIST = 5000
 
@@ -54,9 +55,9 @@ class StatusIn(BaseModel):
 
 
 @router.get("/meta")
-async def meta():
+async def meta(user: UserOut = Depends(require_equipment_view)):
     """Всё, что нужно формам одним запросом."""
-    people = await people_repository.list_people(active_only=True)
+    people = await people_repository.list_people(active_only=True) if P.has(user.permissions, "warehouse.view") else []
     return {
         "categories": await repo.list_categories(),
         "models": await repo.list_models(),
@@ -581,7 +582,7 @@ class AttachIn(BaseModel):
 
 
 @router.post("/points/{point_id}/attach")
-async def attach(point_id: str, payload: AttachIn, user: UserOut = Depends(require_warehouse_edit)):
+async def attach(point_id: str, payload: AttachIn, user: UserOut = Depends(require_equipment_move)):
     try:
         await svc.attach(
             point_id, payload.equipment_id, person_id=payload.person_id, installed_by=payload.installed_by,
@@ -608,7 +609,7 @@ class ReplaceIn(BaseModel):
 
 
 @router.post("/points/{point_id}/replace")
-async def replace(point_id: str, payload: ReplaceIn, user: UserOut = Depends(require_warehouse_edit)):
+async def replace(point_id: str, payload: ReplaceIn, user: UserOut = Depends(require_equipment_move)):
     try:
         return await svc.replace(
             point_id, payload.old_equipment_id, payload.new_equipment_id, person_id=payload.person_id,
@@ -632,7 +633,7 @@ class DetachIn(BaseModel):
 
 
 @router.post("/points/{point_id}/detach/{equipment_id}")
-async def detach(point_id: str, equipment_id: int, payload: DetachIn, user: UserOut = Depends(require_warehouse_edit)):
+async def detach(point_id: str, equipment_id: int, payload: DetachIn, user: UserOut = Depends(require_equipment_move)):
     try:
         res = await svc.detach(
             point_id, equipment_id, to_person_id=payload.to_person_id, date=payload.date,
@@ -653,7 +654,7 @@ class SimIn(BaseModel):
 
 
 @router.post("/points/{point_id}/sim/replace")
-async def sim_replace(point_id: str, payload: SimIn, user: UserOut = Depends(require_warehouse_edit)):
+async def sim_replace(point_id: str, payload: SimIn, user: UserOut = Depends(require_equipment_move)):
     """Заменить SIM-карту комплекса (новую можно ввести номером — если её нет в базе, она заведётся)."""
     try:
         return await svc.sim_replace(
@@ -665,7 +666,7 @@ async def sim_replace(point_id: str, payload: SimIn, user: UserOut = Depends(req
 
 
 @router.post("/points/{point_id}/sim/fix")
-async def sim_fix(point_id: str, payload: SimIn, user: UserOut = Depends(require_warehouse_edit)):
+async def sim_fix(point_id: str, payload: SimIn, user: UserOut = Depends(require_equipment_move)):
     """Исправить номер SIM комплекса (раньше был записан не тот) — без «замены» и без причины снятия."""
     try:
         return await svc.sim_fix(point_id, payload.serial_number, performed_by=_who(user), comment=payload.comment)

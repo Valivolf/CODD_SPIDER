@@ -74,13 +74,19 @@
 <script src="{{ asset_url('static/js/sounds.js') }}"></script>
 <script src="{{ asset_url('static/js/api.js') }}"></script>
 <script src="{{ asset_url('static/js/ui.js') }}"></script>
+<script src="{{ asset_url('static/js/point_card.js') }}"></script>
+{% if accounting_mode %}
+<script src="{{ asset_url('static/js/accounting.js') }}"></script>
+{% else %}
 <script src="{{ asset_url('static/js/chat.js') }}"></script>
 <script src="{{ asset_url('static/js/broadcast.js') }}"></script>
-<script src="{{ asset_url('static/js/point_card.js') }}"></script>
 <script src="{{ asset_url('static/js/apk_select.js') }}"></script>
 <script src="{{ asset_url('static/js/apk_groups.js') }}"></script>
 <script src="{{ asset_url('static/js/apk_check.js') }}"></script>
+{% endif %}
 <script src="{{ asset_url('static/js/apk.js') }}"></script>
+{% if not accounting_mode %}
 <script src="{{ asset_url('static/js/live_maps.js') }}"></script>
+{% endif %}
 </body>
 </html>

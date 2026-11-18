@@ -111,6 +111,7 @@ async def merge(base_id: str, dup_ids: list[str]) -> dict[str, Any]:
         raise ValueError("Не указан комплекс или его дубли")
     summary: dict[str, Any] = {"base": base_id, "merged": [], "moved": {}, "left": {}}
     async with get_connection() as conn:
+        await conn.execute("begin immediate")
         cur = await conn.execute("select 1 from points where id = ?", (base_id,))
         if not await cur.fetchone():
             raise ValueError(f"Комплекса «{base_id}» нет")
@@ -118,6 +119,27 @@ async def merge(base_id: str, dup_ids: list[str]) -> dict[str, Any]:
             cur = await conn.execute("select 1 from points where id = ?", (dup,))
             if not await cur.fetchone():
                 continue
+            # Move accounting values before deleting a duplicate. A conflict rolls back
+            # this entire merge, including any earlier duplicates in the same call.
+            cur = await conn.execute(
+                """select v.field_id, f.name, v.value, b.value
+                   from point_category_field_values v
+                   join point_category_fields f on f.id = v.field_id and f.accounting_only = 1
+                   left join point_category_field_values b on b.field_id = v.field_id and b.point_id = ?
+                   where v.point_id = ?""", (base_id, dup))
+            accounting_values = await cur.fetchall()
+            for fid, name, source, target in accounting_values:
+                if (source or "").strip() and (target or "").strip() and source != target:
+                    raise ValueError(f"Нельзя объединить «{dup}» с «{base_id}»: разные бухгалтерские значения поля «{name}». Сначала разрешите конфликт; данные сохранены.")
+                if (source or "").strip() and not (target or "").strip():
+                    await conn.execute(
+                        """insert into point_category_field_values (point_id, field_id, value, updated_at)
+                           select ?, field_id, value, updated_at from point_category_field_values
+                           where point_id = ? and field_id = ?
+                           on conflict(point_id, field_id) do update set value = excluded.value, updated_at = excluded.updated_at""",
+                        (base_id, dup, fid))
+            if accounting_values:
+                await conn.execute("update points set accounting_revision = accounting_revision + 1 where id = ?", (base_id,))
             # поля: заполняем пустые у основного
             cols = ", ".join(_FILL_FIELDS)
             cur = await conn.execute(f"select {cols} from points where id = ?", (dup,))

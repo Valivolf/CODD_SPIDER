@@ -30,14 +30,15 @@ const whIsPartial = (p) => p.components.length > 0 && p.components_in_stock < p.
 // Вкладки страницы: прежние «Комплексы на складе» (компоненты на полке) и учёт оборудования по
 // серийным номерам (equipment.js / equipment_points.js / equipment_admin.js).
 const WH_TABS = [
-  { key: 'equipment', label: 'Оборудование', render: () => renderEquipmentTab() },
+  { key: 'equipment', label: 'Оборудование', perm: 'equipment.view', render: () => renderEquipmentTab() },
   { key: 'issue', label: 'Выдача и приём', perm: 'warehouse.edit', render: () => renderIssueTab() },
-  { key: 'complexes', label: 'Оборудование на комплексах', render: () => renderComplexesTab() },
-  { key: 'shelf', label: 'Комплексы на складе', render: () => renderWarehousePage() },
-  { key: 'panels', label: 'Солнечные панели', render: () => renderPanelsTab() },
+  { key: 'complexes', label: 'Оборудование на комплексах', perm: 'equipment.view', render: () => renderComplexesTab() },
+  { key: 'shelf', label: 'Комплексы на складе', perm: 'warehouse.view', render: () => renderWarehousePage() },
+  { key: 'panels', label: 'Солнечные панели', perm: 'warehouse.view', render: () => renderPanelsTab() },
   { key: 'import', label: 'Импорт из Excel', perm: 'warehouse.edit', render: () => renderImportTab() },
-  { key: 'history', label: 'История', render: () => renderHistoryTab() },
-  { key: 'reports', label: 'Отчёты и справочники', render: () => renderReportsTab() },
+  { key: 'history', label: 'История', perm: 'equipment.view', render: () => renderHistoryTab() },
+  { key: 'consumables', label: 'Расходные материалы', perm: 'warehouse.view', render: () => renderConsumablesTab() },
+  { key: 'reports', label: 'Отчёты и справочники', perm: 'warehouse.view', render: () => renderReportsTab() },
 ];
 let whTab = 'equipment';
 try { const saved = localStorage.getItem('whTab'); if (WH_TABS.some((t) => t.key === saved)) whTab = saved; } catch { /* без localStorage — первая вкладка */ }
@@ -421,11 +422,16 @@ async function boot() {
   } catch {
     return; // Api.get already redirects to /login on 401
   }
-  if (!can('warehouse.view')) { window.location.href = '/'; return; }
+  if (!canAny('warehouse.view', 'equipment.view')) { window.location.href = '/'; return; }
   initUserUi();
   if (CURRENT_USER.must_change_password) changePasswordForm({ forced: true });
   await loadPointStatuses();
-  await showWhTab(whTab);
+  const pointId = new URLSearchParams(location.search).get('point');
+  if (pointId && can('equipment.view')) {
+    whTab = 'complexes';
+    await showWhTab(whTab);
+    await eqPointCard(pointId);
+  } else await showWhTab(whTab);
   // Live refresh, matching the calendar's 5s poll — only for the «Комплексы на складе» tab,
   // skipped while a modal is open (editing) or the search box has focus/unsent text.
   setInterval(() => {

@@ -37,7 +37,7 @@ from app.repositories import (
     bot_task_progress_repository,
 )
 from app.core import runtime_state
-from app.services import equipment_service, point_health_service
+from app.services import consumables as consumables_service, equipment_service, point_health_service
 
 router = APIRouter(prefix="/api/bot", tags=["bot"], dependencies=[Depends(require_bot_key)])
 
@@ -280,6 +280,19 @@ async def patch_task_progress(task_id: str, payload: ProgressPatchIn):
     return await _progress_payload(task_id, person)
 
 
+@router.get("/consumables")
+async def list_my_consumables(vk_id: int):
+    person = await _require_person(vk_id)
+    try:
+        return await consumables_service.person_balances(person["id"])
+    except consumables_service.ConsumablesError as exc:
+        error_status = getattr(exc, "status_code", None) or getattr(exc, "status", status.HTTP_400_BAD_REQUEST)
+        detail = getattr(exc, "detail", None) or str(exc)
+        if not isinstance(error_status, int) or not status.HTTP_400_BAD_REQUEST <= error_status < 600:
+            error_status = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=error_status, detail=detail) from exc
+
+
 @router.put("/work-sessions/{session_id}/end")
 async def end_work_session(session_id: int):
     session = await bot_work_sessions_repository.end(session_id)
@@ -373,6 +386,11 @@ async def recheck_point(point_id: str):
     return {"status": point.get("status") or ""}  # type: ignore[union-attr]
 
 
+class ConsumableInstallationIn(BaseModel):
+    item_id: int
+    quantity: int
+
+
 class VisitReportIn(BaseModel):
     task_id: str
     vk_id: int
@@ -395,6 +413,7 @@ class VisitReportIn(BaseModel):
     sim_removed: str | None = None
     sim_installed: str | None = None
     sim_removed_state: str | None = None
+    consumables: list[ConsumableInstallationIn] | None = None
 
 
 @router.post("/visit-reports")
@@ -421,9 +440,25 @@ async def submit_visit_report(payload: VisitReportIn):
         "sim_removed": payload.sim_removed, "sim_installed": payload.sim_installed,
         "sim_removed_state": payload.sim_removed_state if payload.sim_removed_state in ("working", "defective") else "",
     }
-    report = await task_visit_reports_repository.upsert(
-        task["id"], task["point"], visit_type, data, performed_by=person["full_name"], author_person_id=person["id"]
-    )
+
+    async def record_consumables(conn):
+        await consumables_service.record_task_installations_conn(
+            conn, task["id"], task["point"], person["id"],
+            [dict(item) for item in payload.consumables or []], actor=person["full_name"]
+        )
+
+    try:
+        report = await task_visit_reports_repository.upsert(
+            task["id"], task["point"], visit_type, data, performed_by=person["full_name"],
+            author_person_id=person["id"],
+            before_commit=record_consumables if payload.consumables else None,
+        )
+    except consumables_service.ConsumablesError as exc:
+        error_status = getattr(exc, "status_code", None) or getattr(exc, "status", status.HTTP_400_BAD_REQUEST)
+        detail = getattr(exc, "detail", None) or str(exc)
+        if not isinstance(error_status, int) or not status.HTTP_400_BAD_REQUEST <= error_status < 600:
+            error_status = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=error_status, detail=detail) from exc
     # Задание закрыто: сохранённый прогресс больше не нужен, а у второго монтёра бригады рабочая сессия не должна
     # висеть в «Сейчас в работе» — бот увидит это сам (см. /tasks/{id}/watch).
     await bot_task_progress_repository.delete(task["id"])

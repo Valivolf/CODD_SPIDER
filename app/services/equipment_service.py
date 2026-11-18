@@ -17,6 +17,7 @@ from typing import Any, Iterable, Optional
 from app.core import equipment as eq
 from app.db.database import get_connection
 from app.repositories import equipment_repository as repo
+from app.repositories import point_components_repository
 from app.repositories import point_links_repository as links
 
 
@@ -28,6 +29,11 @@ class EquipmentError(Exception):
         super().__init__(detail)
         self.detail = detail
         self.status_code = status_code
+
+
+async def _sync_point_status_conn(conn, *point_ids: Optional[str]) -> None:
+    for point_id in dict.fromkeys(pid for pid in point_ids if pid):
+        await point_components_repository.recompute_status_conn(conn, point_id, "warehouse")
 
 
 def _clean(value: Optional[str]) -> Optional[str]:
@@ -189,6 +195,7 @@ async def issue(
         raise EquipmentError("Не выбрано ни одной единицы оборудования")
     issued: list[int] = []
     skipped: list[dict[str, Any]] = []
+    affected_points: set[str] = set()
     async with get_connection() as conn:
         person = await _person(conn, person_id)
         day = _clean(date) or repo.today()
@@ -206,6 +213,8 @@ async def issue(
                     "reason": f"состояние «{item['status'] or '—'}» — выдавать нельзя",
                 })
                 continue
+            if item.get("removed_point_id"):
+                affected_points.add(item["removed_point_id"])
             await conn.execute(
                 "update equipment set place = 'person', person_id = ?, held_reason = 'issued', issued_date = ?, "
                 "updated_at = ? where id = ?",
@@ -216,6 +225,7 @@ async def issue(
                 performed_by=performed_by, comment=_clean(comment), event_date=day,
             )
             issued.append(eid)
+        await _sync_point_status_conn(conn, *sorted(affected_points))
         await conn.commit()
     return {"issued": issued, "skipped": skipped}
 
@@ -231,6 +241,7 @@ async def accept_from_person(
         raise EquipmentError("Не выбрано ни одной единицы оборудования")
     accepted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    affected_points: set[str] = set()
     async with get_connection() as conn:
         if status_id and not await repo.get_status_conn(conn, status_id):
             raise EquipmentError("Состояние не найдено", 404)
@@ -244,6 +255,8 @@ async def accept_from_person(
                 skipped.append({"id": eid, "serial_number": item["serial_number"], "reason": f"не числится на этом монтёре — {_where_is(item)}"})
                 continue
             removed = item["held_reason"] in eq.HELD_FROM_POINT
+            if item.get("removed_point_id"):
+                affected_points.add(item["removed_point_id"])
             await conn.execute(
                 "update equipment set place = 'stock', person_id = NULL, held_reason = NULL, issued_date = NULL, "
                 "accepted_date = ?, accepted_by = ?, status_id = coalesce(?, status_id), updated_at = ? where id = ?",
@@ -260,6 +273,7 @@ async def accept_from_person(
                 performed_by=performed_by, comment=". ".join(p for p in (extra, _clean(comment)) if p) or None, event_date=day,
             )
             accepted.append({"id": eid, "serial_number": item["serial_number"], "removed": removed})
+        await _sync_point_status_conn(conn, *sorted(affected_points))
         await conn.commit()
     return {"accepted": accepted, "skipped": skipped}
 
@@ -316,6 +330,7 @@ async def accept_substitute(
             comment=f"Монтёр {expected['person_name'] or '—'} сдал другой номер (№{actual['serial_number']}) — "
                     "где это оборудование сейчас, неизвестно",
         )
+        await _sync_point_status_conn(conn, expected.get("removed_point_id"))
         await conn.commit()
     return {"accepted": actual["serial_number"], "unknown": expected["serial_number"], "removed": removed}
 
@@ -335,6 +350,7 @@ async def found_unknown(
             (day, _clean(performed_by), repo.now_iso(), equipment_id),
         )
         await repo.add_history_conn(conn, eq.ACT_FOUND, item=item, performed_by=performed_by, comment=_clean(comment), event_date=day)
+        await _sync_point_status_conn(conn, item.get("removed_point_id"))
         await conn.commit()
     return {"id": equipment_id, "serial_number": item["serial_number"]}
 
@@ -344,7 +360,7 @@ async def found_unknown(
 async def _detach_conn(
     conn, item: dict[str, Any], *, point_id: str, to_person: Optional[dict[str, Any]], date: str,
     performed_by: Optional[str], comment: Optional[str], status_id: Optional[int], action: str, extra: str = "",
-    reason: Optional[str] = None, sync_point: bool = True,
+    reason: Optional[str] = None, sync_point: bool = True, sync_status: bool = True,
 ) -> None:
     """Снять с комплекса. `reason` — почему снимается (какая проблема): хранится у единицы, пока она ждёт приёмки и
     лежит на складе, и пишется в журнал. `sync_point=False` — поле «Номер SIM» комплекса не трогать (им управляет вызывающий)."""
@@ -383,12 +399,14 @@ async def _detach_conn(
         person_name=to_person["full_name"] if to_person else None, performed_by=performed_by,
         comment=". ".join(p for p in pieces if p) or None, event_date=date,
     )
+    if sync_status:
+        await _sync_point_status_conn(conn, point_id)
 
 
 async def _attach_conn(
     conn, item: dict[str, Any], *, point_id: str, person: Optional[dict[str, Any]], installed_by: Optional[str],
     date: str, performed_by: Optional[str], comment: Optional[str], action: str, extra: str = "",
-    sync_point: bool = True,
+    sync_point: bool = True, sync_status: bool = True,
 ) -> None:
     if item["place"] == eq.PLACE_STOCK:
         _check_usable(item)
@@ -417,6 +435,8 @@ async def _attach_conn(
         comment=". ".join(p for p in ((f"Монтёр: {by}" if by else ""), extra, _clean(comment) or "") if p) or None,
         event_date=date,
     )
+    if sync_status:
+        await _sync_point_status_conn(conn, point_id)
 
 
 async def _reuse_kept_conn(conn, item: dict[str, Any]) -> str:
@@ -590,14 +610,16 @@ async def replace(
         await _attach_conn(
             conn, new, point_id=pid, person=person, installed_by=installed_by, date=day, performed_by=performed_by,
             comment=comment, action=eq.ACT_REPLACE_IN, extra=f"Заменено взамен №{(actual or old)['serial_number']}",
+            sync_status=False,
         )
         removed, note, marked = await _apply_actual_conn(conn, old, actual, point_id=pid, date=day, performed_by=performed_by)
         await _detach_conn(
             conn, removed, point_id=pid, to_person=person if removed_to_person else None, date=day,
             performed_by=performed_by, comment=comment, status_id=removed_status_id, action=eq.ACT_REPLACE_OUT,
             extra=". ".join(p for p in (f"Заменено на №{new['serial_number']}", note) if p), reason=reason,
-            sync_point=not _is_sim(removed),   # новая SIM уже записана в поле комплекса — старую оттуда не «снимаем»
+            sync_point=not _is_sim(removed), sync_status=False,   # новая SIM уже записана в поле комплекса — старую оттуда не «снимаем»
         )
+        await _sync_point_status_conn(conn, pid)
         await conn.commit()
     return {
         "removed": removed["serial_number"], "installed": new["serial_number"],
@@ -686,12 +708,15 @@ async def install_by_suffix(
                 conn, new, point_id=pid, person=None, installed_by=by, date=day, performed_by=performed_by, comment=comment,
                 action=eq.ACT_REPLACE_IN if old else eq.ACT_ATTACH,
                 extra=". ".join(p for p in ((f"Заменено взамен №{old['serial_number']}" if old else ""), f"Указано по последним символам номера …{key}", where_note) if p),
+                sync_status=False,
             )
             if old:
                 await _detach_conn(
                     conn, old, point_id=pid, to_person=person, date=day, performed_by=performed_by, comment=comment, status_id=None,
                     action=eq.ACT_REPLACE_OUT, extra=f"Заменено на №{new['serial_number']}", reason=reason,
+                    sync_status=False,
                 )
+            await _sync_point_status_conn(conn, pid)
             await conn.commit()
             return {"mode": "linked", "installed": new["serial_number"], "removed": old["serial_number"] if old else "", "held_by_other": bool(other_hands)}
         # В учёте такого номера нет: старое снимаем, новое запоминаем — привяжется само при добавлении в систему.
@@ -699,7 +724,9 @@ async def install_by_suffix(
             await _detach_conn(
                 conn, old, point_id=pid, to_person=person, date=day, performed_by=performed_by, comment=comment, status_id=None,
                 action=eq.ACT_REPLACE_OUT, extra=f"Заменено на оборудование с номером …{key} (в учёте его пока нет)", reason=reason,
+                sync_status=False,
             )
+        await _sync_point_status_conn(conn, pid)
         cat_name = None
         if category_id:
             cur = await conn.execute("select name from equipment_categories where id = ?", (category_id,))
@@ -953,7 +980,7 @@ async def _group_installed_sims_conn(conn, point_id: str) -> list[dict[str, Any]
 
 async def _put_on_point_conn(
     conn, item: dict[str, Any], *, point_id: str, date: str, installed_by: Optional[str], performed_by: Optional[str],
-    action: str, comment: Optional[str] = None,
+    action: str, comment: Optional[str] = None, sync_status: bool = True,
 ) -> None:
     """Поставить единицу на комплекс без проверок «годности» (для SIM, которую уже приняли решением человека)."""
     again = await _reuse_kept_conn(conn, item)
@@ -968,11 +995,13 @@ async def _put_on_point_conn(
         conn, action, item=item, point_id=point_id, person_name=_clean(installed_by), performed_by=performed_by,
         comment=_clean(comment), event_date=date,
     )
+    if sync_status:
+        await _sync_point_status_conn(conn, point_id)
 
 
 async def _new_sim_item_conn(
     conn, serial: str, *, point_id: Optional[str], performed_by: Optional[str], comment: str,
-    installed_by: Optional[str] = None, model_name: Optional[str] = None,
+    installed_by: Optional[str] = None, model_name: Optional[str] = None, sync_status: bool = True,
 ) -> dict[str, Any]:
     """Новая SIM-карта в учёте: сразу на комплексе (point_id) либо на складе."""
     model_id = await repo.sim_model_id_conn(conn, model_name)
@@ -989,6 +1018,8 @@ async def _new_sim_item_conn(
         conn, eq.ACT_ATTACH if point_id else eq.ACT_RECEIVE, item=item, point_id=point_id, performed_by=performed_by,
         comment=comment, event_date=day,
     )
+    if point_id and sync_status:
+        await _sync_point_status_conn(conn, point_id)
     return item  # type: ignore[return-value]
 
 
@@ -1052,6 +1083,7 @@ async def backfill_point_sims() -> dict[str, int]:
     """При запуске: комплексам с номером SIM, но без SIM-карты в учёте оборудования, заводим запись. Уже существующие
     единицы не трогаем (SIM, чей номер есть в базе в другом месте, пропускается — это решается вручную)."""
     created = skipped = ignored = 0
+    affected_points: set[str] = set()
     async with get_connection() as conn:
         # Убираем SIM-«единицы», которые эта же сверка завела по заглушкам вместо номера (нет цифр / слишком короткие):
         # у них одна запись в журнале — «Учтена автоматически».
@@ -1091,9 +1123,12 @@ async def backfill_point_sims() -> dict[str, int]:
             await _new_sim_item_conn(
                 conn, key, point_id=pid, performed_by=None,
                 comment="Учтена автоматически: номер SIM указан в карточке комплекса",
+                sync_status=False,
             )
+            affected_points.add(pid)
             serials.add(key.casefold())
             created += 1
+        await _sync_point_status_conn(conn, *sorted(affected_points))
         await conn.commit()
     if created or skipped or ignored or removed:
         logger.info(
@@ -1198,14 +1233,17 @@ async def sim_replace(
         for old in installed:
             await _detach_conn(
                 conn, old, point_id=old.get("point_id") or pid, to_person=person, date=day, performed_by=performed_by, comment=comment,
-                status_id=ok_status, action=eq.ACT_REPLACE_OUT, extra=f"Заменена на SIM №{key}{state_note}", reason=reason, sync_point=False,
+                status_id=ok_status, action=eq.ACT_REPLACE_OUT, extra=f"Заменена на SIM №{key}{state_note}", reason=reason,
+                sync_point=False, sync_status=False,
             )
         await _put_on_point_conn(
             conn, item, point_id=pid, date=day, installed_by=person["full_name"] if person else None, performed_by=performed_by,
             action=eq.ACT_REPLACE_IN if installed else eq.ACT_ATTACH,
             comment=". ".join(p for p in ((f"Заменена взамен №{installed[0]['serial_number']}" if installed else ""), _clean(comment) or "") if p) or None,
+            sync_status=False,
         )
         ip = await _set_point_sim_conn(conn, pid, key)
+        await _sync_point_status_conn(conn, pid, *(old.get("point_id") for old in installed))
         await conn.commit()
     return {
         "removed": [o["serial_number"] for o in installed], "installed": key, "created": created,

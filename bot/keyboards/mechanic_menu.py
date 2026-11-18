@@ -149,6 +149,8 @@ def get_simple_menu_keyboard(photo_count: int = 0, has_report: bool = False, too
     keyboard.add(Callback(_photo_label(photo_count), {"action": "repair_photo"}))
     keyboard.add(Callback(_report_label(has_report), {"action": "repair_report"}))
     keyboard.row()
+    keyboard.add(Callback("🧴 Расходники", {"action": "consumables"}))
+    keyboard.row()
     if tools:
         keyboard.add(Callback("🔍 Проверка доступности", {"action": "repair_check"}))
         keyboard.add(Callback("💳 Замена SIM-карты", {"action": "repair_sim_change"}))
@@ -270,6 +272,7 @@ def get_repair_menu_keyboard(
     keyboard.add(Callback(_photo_label(photo_count), {"action": "repair_photo"}))
     keyboard.add(Callback(_report_label(has_report), {"action": "repair_report"}))
     keyboard.row()
+    keyboard.add(Callback("🧴 Расходники", {"action": "consumables"}))
     keyboard.add(Callback("🔧 Замена оборудования", {"action": "repair_equipment"}))
     keyboard.row()
     if demontage:

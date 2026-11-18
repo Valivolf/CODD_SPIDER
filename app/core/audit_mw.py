@@ -14,6 +14,7 @@ from app.services import security_log
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 # Адреса, изменения которых попадают в журнал безопасности. Вход/выход, пользователи, копия базы и ключ шифрования пишутся своими событиями в самих маршрутах.
 AUDITED_PREFIXES = (
+    "/api/point-category-fields", "/api/point-files", "/api/monitoring/photos/upload",
     "/api/ai/settings", "/api/ai-agents", "/api/photo-storage", "/api/forms-auto", "/api/weather/settings", "/api/yandex-robot", "/api/bot-settings",
     "/api/people", "/api/points", "/api/point-categories", "/api/point-statuses", "/api/work-types",
 )

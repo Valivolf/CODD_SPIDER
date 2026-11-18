@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import (
+    routes_accounting,
     routes_absences,
     routes_access_issues,
     routes_auth,
@@ -27,6 +28,7 @@ from app.api import (
     routes_ai,
     routes_apk_groups,
     routes_point_files,
+    routes_point_fields,
     routes_stat_counters,
     routes_ai_agents,
     routes_assistant,
@@ -37,6 +39,7 @@ from app.api import (
     routes_account_chat,
     routes_chat_broadcast,
     routes_crews,
+    routes_consumables,
     routes_demontage_requests,
     routes_encryption,
     routes_equipment,
@@ -91,6 +94,7 @@ from app.services import apk_group_auto, forms_auto, security_log, system_health
 from app.services.backup_service import daily_backup_loop
 from app.services.point_health_service import point_health_loop
 from app.web import (
+    routes_accounting_page,
     routes_absences_page,
     routes_apk_page,
     routes_assistant_page,
@@ -234,7 +238,7 @@ def _install_error_handlers(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    # /docs, /redoc и /openapi.json отключены: схема всех адресов сервера не должна отдаваться без входа (администратору — /api/system/openapi)
+    # Публичные /docs, /redoc и /openapi.json отключены; закрытая Swagger UI доступна в /api/system/docs.
     app = FastAPI(title=settings.app_name, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_REQUEST_BODY_SIZE)
     app.middleware("http")(permission_guard)         # права роли на каждый адрес (app/core/permissions.py::RULES)
@@ -247,6 +251,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_system.router)
     app.include_router(routes_security.router)
     app.include_router(routes_pages.router)
+    app.include_router(routes_accounting_page.router)
     app.include_router(routes_warehouse_page.router)
     app.include_router(routes_apk_page.router)
     app.include_router(routes_absences_page.router)
@@ -258,6 +263,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_notifications_page.router)
     app.include_router(routes_plan_print.router)
     app.include_router(routes_auth.router)
+    app.include_router(routes_accounting.router)
     app.include_router(routes_users.router)
     app.include_router(routes_games.router)
     app.include_router(routes_games.admin_router)
@@ -270,6 +276,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_people.router)
     app.include_router(routes_points.router)
     app.include_router(routes_point_categories.router)
+    app.include_router(routes_point_fields.router)
     app.include_router(routes_point_plans.router)
     app.include_router(routes_apk_groups.router)
     app.include_router(routes_point_files.router)
@@ -282,6 +289,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_crews.router)
     app.include_router(routes_warehouse.router)
     app.include_router(routes_equipment.router)
+    app.include_router(routes_consumables.router)
     app.include_router(routes_equipment_import.router)
     app.include_router(routes_sklad_import.router)
     app.include_router(routes_solar_panels.router)

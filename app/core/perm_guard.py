@@ -9,6 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.core import permissions as P
+from app.core import accounting
 from app.core.clientip import client_ip
 from app.core.deps import get_session_user
 from app.services import security_log
@@ -24,6 +25,11 @@ async def permission_guard(request: Request, call_next):
         user = await get_session_user(request)
         if user is not None and not user.must_change_password:
             ok, need, _note = P.allowed(request.method, path, user.permissions)
+            if accounting.is_accountant(user):
+                if path == "/api/monitoring/photos/upload" and request.method == "POST":
+                    ok, need = accounting.can_edit(user), ("accounting.edit",)
+                if not accounting.apk_request_allowed(request.method, path):
+                    ok, need = False, ("points.edit",)
             if not ok:
                 if request.method not in ("GET", "HEAD", "OPTIONS") or P.CORE not in need:
                     try:

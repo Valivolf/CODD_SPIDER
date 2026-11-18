@@ -29,7 +29,7 @@ function matchesQuery(query, ...fields) {
 // actually reach (e.g. warehouse never sees this, apk.js has no
 // 'warehouse' case), but every page that can be opened by 'viewer' needs
 // this one label in common.
-const ROLE_DISPLAY_LABEL = { admin: 'админ', user: 'оператор', warehouse: 'склад', viewer: 'только просмотр', absences: 'отсутствия' };
+const ROLE_DISPLAY_LABEL = { admin: 'админ', user: 'оператор', warehouse: 'склад', accounting: 'бухгалтерия', viewer: 'только просмотр', absences: 'отсутствия' };
 
 // ---------- права роли ----------
 // Права приходят с /api/auth/me (CURRENT_USER.permissions; у администратора ['*']). Скрытие кнопок и разделов — удобство: запрет на сервере действует всегда
@@ -43,7 +43,7 @@ function can(key) {
 function canAny(...keys) { return keys.some((k) => can(k)); }
 function userRoleLabel(u) { return (u && (u.role_name || ROLE_DISPLAY_LABEL[u.role] || u.role)) || ''; }
 // Страницы по порядку предпочтения — как на сервере (app/core/permissions.py::PAGES): куда вести человека, если «своей» страницы у него нет
-const PAGE_ORDER = [['/', 'calendar.view', 'Календарь'], ['/apk', ['points.view', 'check.use'], 'Все АПК'], ['/warehouse', 'warehouse.view', 'Склад'], ['/reports', 'reports.view', 'Отчёты'],
+const PAGE_ORDER = [['/', 'calendar.view', 'Календарь'], ['/accounting', 'accounting.view', 'Комплексы бухгалтерии'], ['/apk', ['points.view', 'check.use'], 'Все АПК'], ['/warehouse', 'warehouse.view', 'Склад'], ['/reports', 'reports.view', 'Отчёты'],
   ['/monitoring', 'monitoring.view', 'Мониторинг'], ['/notifications', 'notifications.view', 'Уведомления'], ['/stats', 'stats.view', 'Статистика'], ['/absences', 'absences.view', 'Отсутствия'],
   ['/assistant', 'assistant.use', 'Помощник']];
 function firstPageFor(exceptPath) {
@@ -1830,7 +1830,7 @@ async function openPointPhotos(pointId, back = null, focusDate = null, opts = {}
   try { data = await Api.get(listUrl); }
   catch (e) { alert('Не удалось загрузить фото: ' + e.message); return; }
   const open = new Set(focusDate ? [focusDate] : data.days.slice(0, 1).map((d) => d.date));
-  const canUpload = can('photos.upload');
+  const canUpload = can('photos.upload') || (CURRENT_USER?.role === 'accounting' && can('accounting.edit'));
   const today = ppLocalIso(new Date());
   let picked = [];                                                     // выбрано для загрузки: { file, url }
   let busy = false;
@@ -1851,7 +1851,7 @@ async function openPointPhotos(pointId, back = null, focusDate = null, opts = {}
         <div class="flex items-center justify-between gap-2 px-4 py-2.5 cursor-pointer select-none" data-pp-head="${d.date}">
           <span class="text-sm font-semibold"><small class="text-slate-500 mr-1">${open.has(d.date) ? '▾' : '▸'}</small>${esc(ppDayLabel(d.date))}
             <span class="text-slate-500 font-normal">· ${ppPlural(d.photos.length, 'фото', 'фото', 'фото')}</span></span>
-          <a href="/api/monitoring/photos/export?date=${d.date}" data-pp-zip class="${btnGhost} !px-3 !py-1 text-xs" title="Архив всех фото этого дня (по всем комплексам)">Архив .zip</a>
+          ${CURRENT_USER?.role !== 'accounting' ? `<a href="/api/monitoring/photos/export?date=${d.date}" data-pp-zip class="${btnGhost} !px-3 !py-1 text-xs" title="Архив всех фото этого дня (по всем комплексам)">Архив .zip</a>` : ''}
         </div>
         <div class="px-4 pb-3" style="display:${open.has(d.date) ? 'grid' : 'none'}; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:8px">
           ${d.photos.map((ph) => ppThumb({ ...ph, date: d.date })).join('')}</div>

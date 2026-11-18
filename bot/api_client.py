@@ -121,26 +121,35 @@ async def submit_visit_report(
     sim_removed: Optional[str] = None,
     sim_installed: Optional[str] = None,
     sim_removed_state: Optional[str] = None,
+    consumables: Optional[list[dict[str, int]]] = None,
 ) -> dict:
+    payload = {
+        "task_id": task_id,
+        "vk_id": vk_id,
+        "result_status": result_status,
+        "comment": comment,
+        "equipment_removed": equipment_removed,
+        "equipment_installed": equipment_installed,
+        "repair_mode": repair_mode,
+        "fault": fault,
+        "needs": needs,
+        "outcome": outcome,
+        "sim_removed": sim_removed,
+        "sim_installed": sim_installed,
+        "sim_removed_state": sim_removed_state,
+    }
+    if consumables:
+        payload["consumables"] = consumables
     return await _request(
         "POST",
         "/api/bot/visit-reports",
-        json={
-            "task_id": task_id,
-            "vk_id": vk_id,
-            "result_status": result_status,
-            "comment": comment,
-            "equipment_removed": equipment_removed,
-            "equipment_installed": equipment_installed,
-            "repair_mode": repair_mode,
-            "fault": fault,
-            "needs": needs,
-            "outcome": outcome,
-            "sim_removed": sim_removed,
-            "sim_installed": sim_installed,
-            "sim_removed_state": sim_removed_state,
-        },
+        json=payload,
     )
+
+
+async def get_my_consumables(vk_id: int) -> list[dict]:
+    """Личные расходники монтёра с доступным остатком."""
+    return await _request("GET", "/api/bot/consumables", params={"vk_id": vk_id})
 
 
 UPLOAD_TIMEOUT = httpx.Timeout(120.0, connect=15.0)       # сервер пишет фото на сетевой диск — это бывает медленно; 15 секунд на всё не хватало, и фото терялось

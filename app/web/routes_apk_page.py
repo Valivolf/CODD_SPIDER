@@ -23,11 +23,12 @@ templates.env.globals["asset_url"] = asset_url
 
 @router.get("/apk", response_class=HTMLResponse)
 async def apk_page(request: Request):
-    user, redirect = await page_user(request, "points.view", "check.use")
+    user, redirect = await page_user(request, "points.view", "check.use", "accounting.view")
     if redirect:
         return redirect
     settings = get_settings()
     return templates.TemplateResponse(
         request, "apk.html",
-        {"app_name": settings.app_name, "yandex_maps_api_key": settings.yandex_maps_api_key},
+        {"app_name": settings.app_name, "yandex_maps_api_key": "" if user.role == "accounting" else settings.yandex_maps_api_key,
+         "accounting_mode": user.role == "accounting"},
     )

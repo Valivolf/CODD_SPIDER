@@ -9,6 +9,7 @@ avoid that.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from typing import Any, Optional
 
@@ -104,10 +105,14 @@ def _stored(key: str, value: str) -> str:
     return field_crypto.encrypt(f"points.{key}", value) if key in _ENCRYPTED_KEYS else value
 
 # «Частично на складе» — подпись, а не статус (см. app/core/warehouse.py): точка
-# «На складе», у которой есть компонент, не лежащий на складе.
+# «На складе», у которой есть старый компонент или серийная единица вне склада.
 _STOCK_PARTIAL_SQL = (
-    f"(p.status = '{WAREHOUSE_STATUS}' and exists "
-    "(select 1 from point_components c where c.point_id = p.id and c.in_stock = 0)) as stock_partial"
+    f"""(p.status = '{WAREHOUSE_STATUS}' and (
+        exists (select 1 from point_components c where c.point_id = p.id and c.in_stock = 0)
+        or exists (select 1 from equipment e
+                   where (e.place = 'point' and e.point_id = p.id)
+                      or (e.removed_point_id = p.id and e.place in ('person', 'unknown')))
+    )) as stock_partial"""
 )
 
 _READ_SELECT = f"""
@@ -155,11 +160,31 @@ async def _attach_stock_details(items: list[dict[str, Any]]) -> list[dict[str, A
     if not ids:
         return items
     comps = await point_components_repository.list_for_points(ids)
+    serial_in: dict[str, list[str]] = {}
+    serial_out: dict[str, list[str]] = {}
+    async with get_connection() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" for _ in chunk)
+            cur = await conn.execute(
+                f"""select coalesce(e.removed_point_id, e.point_id), e.place, c.name, m.name, e.serial_number
+                    from equipment e
+                    join equipment_models m on m.id = e.model_id
+                    join equipment_categories c on c.id = m.category_id
+                    where coalesce(e.removed_point_id, e.point_id) in ({marks})
+                      and (e.place = 'stock' or e.place in ('point', 'person', 'unknown'))
+                    order by e.id""",
+                chunk,
+            )
+            for point_id, place, category, model, serial in await cur.fetchall():
+                label = f"{category} · {model} №{serial}"
+                target = serial_in if place == "stock" else serial_out
+                target.setdefault(point_id, []).append(label)
     for p in items:
         if p.get("stock_partial"):
             rows = comps.get(p["id"], [])
-            p["stock_in"] = [c["name"] for c in rows if c["in_stock"]]
-            p["stock_out"] = [c["name"] for c in rows if not c["in_stock"]]
+            p["stock_in"] = [c["name"] for c in rows if c["in_stock"]] + serial_in.get(p["id"], [])
+            p["stock_out"] = [c["name"] for c in rows if not c["in_stock"]] + serial_out.get(p["id"], [])
     return items
 
 
@@ -352,6 +377,78 @@ async def search_points(
                 d["group_note"], d["group_need"], d["group_work_type"], d["group_added_at"] = (x or "" for x in r[len(_KEYS) + 6: len(_KEYS) + 10])
             items.append(d)
     await _attach_stock_details(items)
+    return items, total
+
+
+def _accounting_value_sql(name: str) -> str:
+    # Names are internal constants, never request input. Both е/ё spellings are accepted.
+    return ("(select v.value from point_category_field_values v join point_category_fields f on f.id = v.field_id "
+            "where v.point_id = p.id and f.accounting_only = 1 "
+            "and (f.category_id is null or f.category_id = p.category_id) "
+            f"and replace(pylower(f.name), 'ё', 'е') = '{name}' order by f.id limit 1)")
+
+
+_ACCOUNTING_NAME_SQL = _accounting_value_sql("наименование в бухгалтерском учете")
+_ACCOUNTING_INVENTORY_SQL = _accounting_value_sql("инвентарный номер")
+_ACCOUNTING_PRESENT_SQL = """exists (
+    select 1 from point_category_field_values v join point_category_fields f on f.id = v.field_id
+    where v.point_id = p.id and f.accounting_only = 1
+      and (f.category_id is null or f.category_id = p.category_id) and length(trim(v.value)) > 0
+)"""
+
+
+async def search_accounting_points(search: str = "", limit: int = 50, offset: int = 0, *,
+                                   registered_only: bool = True, point_id: str | None = None,
+                                   inventory: str | None = None,
+                                   point_ids: list[str] | None = None) -> tuple[list[dict[str, Any]], int]:
+    """Allowlisted accounting projection; no technical columns or technical search terms."""
+    where: list[str] = [_ACCOUNTING_PRESENT_SQL] if registered_only else []
+    params: list[Any] = []
+    if point_ids is not None:
+        where.append("p.id in (select value from json_each(?))")
+        params.append(json.dumps(point_ids))
+    if point_id is not None:
+        where.append("p.id = ?")
+        params.append(point_id)
+    if inventory is not None:
+        # Inventory identifiers remain strings. No punctuation stripping or numeric conversion.
+        where.append(f"(pylower(trim(p.inventory_number)) = pylower(?) or "
+                     f"pylower(trim(coalesce({_ACCOUNTING_INVENTORY_SQL}, ''))) = pylower(?))")
+        params.extend([inventory.strip(), inventory.strip()])
+    for word in search.split():
+        like = "%" + word.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        cols = ["p.id", "p.inventory_number", _ACCOUNTING_NAME_SQL, _ACCOUNTING_INVENTORY_SQL]
+        where.append("(" + " or ".join(f"pylower(coalesce({c}, '')) like pylower(?) escape '!'" for c in cols) + ")")
+        params.extend([like] * len(cols))
+    where_sql = (" where " + " and ".join(where)) if where else ""
+    async with get_connection() as conn:
+        # One snapshot for the values and their version.
+        await conn.execute("begin")
+        cur = await conn.execute("select count(*) from points p" + where_sql, params)
+        (total,) = await cur.fetchone()
+        cur = await conn.execute(
+            "select p.id, p.inventory_number, p.address, p.lat, p.lon, p.accounting_revision, "
+            f"{_ACCOUNTING_NAME_SQL}, {_ACCOUNTING_INVENTORY_SQL}, {_ACCOUNTING_PRESENT_SQL} "
+            "from points p" + where_sql + " order by p.id limit ? offset ?", [*params, limit, offset])
+        items = [dict(zip(("id", "inventory_number", "address", "lat", "lon", "accounting_revision",
+                           "accounting_name", "accounting_inventory", "has_accounting"), row))
+                 for row in await cur.fetchall()]
+        for item in items:
+            item["accounting_fields"] = []
+            item["accounting_name"] = item["accounting_name"] or ""
+            item["accounting_inventory"] = item["accounting_inventory"] or ""
+            item["has_accounting"] = bool(item["has_accounting"])
+        if items:
+            by_id = {item["id"]: item for item in items}
+            cur = await conn.execute(
+                """select p.id, f.id, f.name, f.field_type, coalesce(v.value, '')
+                    from points p join point_category_fields f on f.accounting_only = 1
+                      and (f.category_id is null or f.category_id = p.category_id)
+                    left join point_category_field_values v on v.point_id = p.id and v.field_id = f.id
+                    where p.id in (select value from json_each(?)) order by f.sort_order, f.id""",
+                (json.dumps(list(by_id)),))
+            for pid, fid, name, typ, value in await cur.fetchall():
+                by_id[pid]["accounting_fields"].append({"id": fid, "name": name, "field_type": typ, "value": value})
     return items, total
 
 

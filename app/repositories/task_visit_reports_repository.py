@@ -13,8 +13,9 @@ like any other status change.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
+import aiosqlite
 from app.core.work_types import is_repair_type, work_type_names
 from app.core import stats_cache
 from app.db.database import get_connection
@@ -203,6 +204,7 @@ async def upsert(
     author_person_id: Optional[int] = None, edited_by: Optional[str] = None,
     created_at: Optional[str] = None, source: Optional[str] = None, apply_status: bool = True,
     imported: bool = False, import_batch: Optional[str] = None,
+    before_commit: Optional[Callable[[aiosqlite.Connection], Awaitable[None]]] = None,
 ) -> dict[str, Any]:
     """One report per task (unique task_id) — resubmitting the same task
     edits its existing report instead of creating a duplicate. `visit_type`
@@ -283,6 +285,8 @@ async def upsert(
                 report_time, now, performed_by, author_id, updated_by, int(imported), import_batch or "",
             ),
         )
+        if before_commit is not None:
+            await before_commit(conn)
         await conn.commit()
 
     # Пустой result_status (отчёт со статусом выезда) состояние комплекса не меняет.

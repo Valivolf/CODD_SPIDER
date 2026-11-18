@@ -2,7 +2,7 @@
 точки, каждый со своей отметкой «на складе» и описанием. Заменяют прежние
 готовые поля «Ящик / Камера / Плата» на странице «Склад».
 
-Статус точки по компонентам (recompute_status):
+Статус точки по старым и серийным компонентам (recompute_status):
   - хотя бы один компонент на складе    → «На складе» (если не все — интерфейс
                                           подписывает «Частично на складе»; это
                                           подпись, не статус, см. core/warehouse.py)
@@ -109,34 +109,48 @@ async def set_all_in_stock_conn(conn, point_id: str, in_stock: bool) -> None:
     await conn.execute("update point_components set in_stock = ? where point_id = ?", (int(in_stock), point_id))
 
 
-async def recompute_status(point_id: str, source: str = "warehouse") -> Optional[str]:
-    """Sets the point's status from its components (see the module docstring)
-    and logs the change in point_status_history. Returns the resulting status
-    (None if the point doesn't exist)."""
-    async with get_connection() as conn:
-        cur = await conn.execute("select status from points where id = ?", (point_id,))
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        old = row[0] or ""
-        cur = await conn.execute(
-            "select count(*), coalesce(sum(in_stock), 0) from point_components where point_id = ?", (point_id,)
+async def recompute_status_conn(conn, point_id: str, source: str = "warehouse") -> Optional[str]:
+    """Rebuild the warehouse status from legacy and serial-numbered components."""
+    cur = await conn.execute("select status from points where id = ?", (point_id,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    old = row[0] or ""
+    cur = await conn.execute(
+        "select count(*), coalesce(sum(in_stock), 0) from point_components where point_id = ?", (point_id,)
+    )
+    legacy_total, legacy_stocked = await cur.fetchone()
+    cur = await conn.execute(
+        """select count(*), coalesce(sum(case when place = 'stock' then 1 else 0 end), 0)
+           from equipment
+           where (place = 'point' and point_id = ?)
+              or (removed_point_id = ? and place in ('stock', 'person', 'unknown'))""",
+        (point_id, point_id),
+    )
+    equipment_total, equipment_stocked = await cur.fetchone()
+    total = legacy_total + equipment_total
+    if total == 0:
+        return old
+    stocked = legacy_stocked + equipment_stocked
+    if stocked > 0:
+        new = WAREHOUSE_STATUS
+    else:
+        new = "" if old == WAREHOUSE_STATUS else old
+    if new != old:
+        await conn.execute("update points set status = ? where id = ?", (new, point_id))
+        if old == WAREHOUSE_STATUS and new != WAREHOUSE_STATUS:
+            await conn.execute("delete from warehouse_items where point_id = ?", (point_id,))
+        await conn.execute(
+            "insert into point_status_history (point_id, old_status, new_status, source, changed_at, task_id) "
+            "values (?, ?, ?, ?, ?, null)",
+            (point_id, old, new, source, dt.datetime.now(dt.timezone.utc).isoformat()),
         )
-        total, stocked = await cur.fetchone()
-        if total == 0:
-            return old
-        if stocked > 0:
-            new = WAREHOUSE_STATUS
-        else:
-            new = "" if old == WAREHOUSE_STATUS else old
-        if new != old:
-            await conn.execute("update points set status = ? where id = ?", (new, point_id))
-            if old == WAREHOUSE_STATUS and new != WAREHOUSE_STATUS:
-                await conn.execute("delete from warehouse_items where point_id = ?", (point_id,))
-            await conn.execute(
-                "insert into point_status_history (point_id, old_status, new_status, source, changed_at, task_id) "
-                "values (?, ?, ?, ?, ?, null)",
-                (point_id, old, new, source, dt.datetime.now(dt.timezone.utc).isoformat()),
-            )
+    return new
+
+
+async def recompute_status(point_id: str, source: str = "warehouse") -> Optional[str]:
+    """Sets the point's status from its components and records any change."""
+    async with get_connection() as conn:
+        new = await recompute_status_conn(conn, point_id, source)
         await conn.commit()
         return new

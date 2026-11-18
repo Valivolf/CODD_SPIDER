@@ -418,6 +418,8 @@ async def init_db() -> None:
         # onto a `points` table that already existed before this turn.
         for col, ddl in (
             ("inventory_number", "text not null default ''"),
+            # Optimistic locking of accounting values; existing values are not rewritten.
+            ("accounting_revision", "integer not null default 0"),
             ("sim_number", "text not null default ''"),
             ("ip_address", "text not null default ''"),
             ("port", "text not null default ''"),
@@ -476,6 +478,85 @@ async def init_db() -> None:
         # an .rdp file (Windows Remote Desktop), a new one opens straight in
         # the browser with credentials embedded in the URL.
         await _ensure_column(conn, "point_categories", "is_legacy", "integer not null default 0")
+        await conn.execute(
+            """create table if not exists point_category_fields (
+                id integer primary key autoincrement,
+                category_id integer references point_categories(id) on delete cascade,
+                name text not null,
+                field_type text not null default 'text',
+                accounting_only integer not null default 0,
+                sort_order integer not null default 0,
+                created_at text not null,
+                unique(category_id, name)
+            )"""
+        )
+        await conn.execute("create index if not exists idx_point_category_fields_category on point_category_fields(category_id, sort_order)")
+        await conn.execute("update point_category_fields set accounting_only = 0 where category_id is not null and accounting_only != 0")
+        await conn.execute(
+            """create table if not exists point_category_field_values (
+                point_id text not null references points(id) on delete cascade on update cascade,
+                field_id integer not null references point_category_fields(id) on delete cascade,
+                value text not null,
+                updated_at text not null,
+                primary key (point_id, field_id)
+            )"""
+        )
+        await conn.execute("create index if not exists idx_point_category_field_values_field on point_category_field_values(field_id)")
+        await conn.execute(
+            """create table if not exists consumables (
+                id integer primary key autoincrement,
+                name text not null,
+                unit text not null default 'шт.',
+                active integer not null default 1,
+                created_at text not null,
+                updated_at text not null
+            )"""
+        )
+        await conn.execute("create index if not exists idx_consumables_name on consumables(name collate nocase)")
+        await conn.execute(
+            """create table if not exists consumable_movements (
+                id integer primary key autoincrement,
+                consumable_id integer not null references consumables(id),
+                action text not null check(action in ('receipt', 'issue', 'install', 'return')),
+                quantity integer not null check(quantity > 0),
+                person_id integer references people(id) on delete set null,
+                point_id text references points(id) on delete set null on update cascade,
+                task_id text,
+                actor text not null default '',
+                note text not null default '',
+                created_at text not null
+            )"""
+        )
+        await conn.execute("create index if not exists idx_consumable_moves_item on consumable_movements(consumable_id, created_at)")
+        await conn.execute("create index if not exists idx_consumable_moves_person on consumable_movements(person_id, consumable_id)")
+        await conn.execute("create index if not exists idx_consumable_moves_point on consumable_movements(point_id, created_at)")
+        await conn.execute(
+            "create unique index if not exists idx_consumable_task_install "
+            "on consumable_movements(task_id, consumable_id) where action = 'install' and task_id is not null"
+        )
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        for order, (name, field_type) in enumerate((
+            ("Заводской номер", "text"),
+            ("Инвентарный номер", "text"),
+            ("Наименование в бухгалтерском учете", "text"),
+            ("Наименование в паспорте", "text"),
+            ("Балансовая стоимость", "currency"),
+            ("Местонахождение", "text"),
+            ("Год выпуска", "number"),
+            ("Дата ввода в эксплуатацию", "date"),
+            ("Контракт", "text"),
+            ("Ремонтные работы", "textarea"),
+        ), start=1):
+            cur = await conn.execute(
+                "select id from point_category_fields where category_id is null and pylower(name) = pylower(?)",
+                (name,),
+            )
+            if not await cur.fetchone():
+                await conn.execute(
+                    "insert into point_category_fields (category_id, name, field_type, accounting_only, sort_order, created_at) "
+                    "values (null, ?, ?, 1, ?, ?)",
+                    (name, field_type, order, now),
+                )
         cur = await conn.execute("select count(*) from point_categories")
         (category_count,) = await cur.fetchone()
         if category_count == 0:

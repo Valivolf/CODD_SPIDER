@@ -41,6 +41,7 @@ const PAGE_SIZE = 50;
 // shown, without moving the map out from under them. List view has no such
 // state to lose, so it keeps the simple full re-render.
 function close() {
+  if (CURRENT_USER?.role === 'accounting') { Accounting.close(); return; }
   editing = false;
   $('#modal').innerHTML = '';
   if (apkTab !== 'dir') { if (typeof apkCheckAfterClose === 'function') apkCheckAfterClose(); return; }      // вкладка «Проверка» пересчитывает свои карточки
@@ -115,6 +116,7 @@ function apkRowHtml(p) {
         <button data-perm="reports.view,monitoring.view,calendar.view,notifications.view" data-journal="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="История выездов">🕘</button>
         <button data-perm="photos.view" data-point-photos="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="Фото по этому комплексу по дням">📷</button>
         <button data-perm="plans.edit,calendar.edit" data-plan="${esc(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0" title="Добавить в план выезда">📌</button>
+        <a data-perm-show="warehouse.view,equipment.view" href="/warehouse?point=${encodeURIComponent(p.id)}" class="rounded-lg px-2 py-1 text-xs bg-amber-500/15 hover:bg-amber-500/25 transition-colors shrink-0" title="Состав оборудования и история перемещений">📦</a>
         <button data-perm="points.view" data-edit="${esc(p.id)}" title="Карточка комплекса: просмотр и правка" class="rounded-lg px-2 py-1 text-xs bg-slate-700/60 hover:bg-slate-600/60 transition-colors shrink-0">🗂</button>
       </span>
     </div>
@@ -1426,8 +1428,13 @@ async function boot() {
   } catch {
     return; // Api.get already redirects to /login on 401
   }
-  if (!canAny('points.view', 'check.use')) { window.location.href = '/'; return; }
+  if (!canAny('points.view', 'check.use', 'accounting.view')) { window.location.href = '/'; return; }
   initUserUi();
+  if (CURRENT_USER.role === 'accounting') {
+    if (CURRENT_USER.must_change_password) { changePasswordForm({ forced: true }); return; }
+    await Accounting.mount($('#content'));
+    return;
+  }
   if (CURRENT_USER.must_change_password) changePasswordForm({ forced: true });
   await loadPointStatuses();
   await loadWorkTypes();

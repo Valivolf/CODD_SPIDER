@@ -15,6 +15,7 @@ from app.core.names import compact_name, strip_dup_suffix
 from app.models.points import PointIn, PointOut
 from app.models.user import UserOut
 from app.core import permissions as P
+from app.core import accounting
 from app.repositories import point_links_repository, points_repository, state_repository
 from app.services import apk_group_auto, check_service, network_check, point_health_service, point_merge
 from app.services.point_matching import PointIndex
@@ -45,7 +46,7 @@ def _strip_credentials(point: dict, user: UserOut) -> dict:
     if not P.secrets_ok(user.permissions):
         point = {**point, "login": "", "password": ""}
     if not P.network_ok(user.permissions):
-        point = {**point, "ip_address": ""}
+        point = {**point, "ip_address": "", "port": ""}
     return point
 
 
@@ -63,6 +64,13 @@ async def list_points(
     certificate: str = "",
     group_id: int | None = None,
 ):
+    if accounting.is_accountant(user):
+        if not P.has(user.permissions, "accounting.view"):
+            raise HTTPException(403, "Нет права на бухгалтерские сведения")
+        items, total = await points_repository.search_accounting_points(
+            search, min(limit or 200, 200), max(offset, 0), registered_only=False)
+        return Response(content=json.dumps(items, ensure_ascii=False), media_type="application/json",
+                        headers={"X-Total-Count": str(total), "Cache-Control": "no-store"})
     # Plain `GET /api/points` (no params) stays the full, unfiltered list —
     # existing callers (jobForm's point datalist, KML/Excel import matching,
     # the warehouse page) rely on that. The "Все АПК" directory page passes
@@ -284,6 +292,10 @@ async def check_point_port(point_id: str):
 @router.get("/{point_id:path}", response_model=PointOut)
 async def get_point_by_id(point_id: str, user: UserOut = Depends(require_password_ok)):
     """Один комплекс по номеру (точному): карточка не должна зависеть от того, попал ли он в первые строки поиска. Объявлен последним — «/duplicates», «/…/ping» и др. разбираются раньше."""
+    if accounting.is_accountant(user):
+        await accounting.require_point_access(user, point_id)
+        items, _ = await points_repository.search_accounting_points(registered_only=False, point_id=point_id, limit=1)
+        return Response(content=json.dumps(items[0], ensure_ascii=False), media_type="application/json", headers={"Cache-Control": "no-store"})
     point = await points_repository.get_point(point_id)
     if not point:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Точка не найдена")

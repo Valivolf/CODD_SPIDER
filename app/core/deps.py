@@ -108,6 +108,8 @@ def require_perm(*keys: str):
 require_admin = require_perm("admin.users")             # управление пользователями и ролями
 require_warehouse = require_perm("warehouse.view")      # склад: чтение (операции — warehouse.edit ниже и в таблице адресов)
 require_warehouse_edit = require_perm("warehouse.edit")
+require_equipment_view = require_perm("warehouse.view", "equipment.view")
+require_equipment_move = require_perm("warehouse.edit", "equipment.move")
 
 
 async def require_agent(request: Request, authorization: str | None = Header(default=None)) -> dict:

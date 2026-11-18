@@ -9,6 +9,8 @@ from datetime import date as date_cls
 from datetime import timedelta
 from urllib.parse import quote
 
+from app.core import accounting
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -200,9 +202,14 @@ async def list_photo_points():
 
 
 @router.get("/photos/point-items")
-async def list_photo_point_items(point_id: str = Query(...)):
+async def list_photo_point_items(point_id: str = Query(...), user: UserOut = Depends(require_password_ok)):
     """Все фото одного комплекса по дням, новые сверху (кнопка «Фото» на карточке комплекса)."""
-    return await visit_photos_repository.list_for_point(point_id)
+    await accounting.require_point_access(user, point_id)
+    result = await visit_photos_repository.list_for_point(point_id)
+    if accounting.is_accountant(user):
+        for day in result["days"]:
+            day["photos"] = [{k: v for k, v in p.items() if k in ("id", "ext", "date", "name", "imported")} for p in day["photos"]]
+    return result
 
 
 MAX_UPLOAD_PHOTO_BYTES = 15 * 1024 * 1024
@@ -231,6 +238,7 @@ async def upload_point_photo(
     """Фото к комплексу, добавленное вручную из веба, с выбором даты, к которой оно относится. Лежит там же и показывается так же, как фото из бота
     (в «Фото комплекса» и «Фото по дням»); удалять такое фото можно (в отличие от фото из прежнего архива). Один файл за запрос — страница шлёт по одному,
     чтобы большая пачка не упиралась в предел размера запроса и сбой одного снимка не отменял остальные."""
+    await accounting.require_point_access(user, point_id.strip(), write=True)
     _validate_date(date)
     taken = date_cls.fromisoformat(date)
     if taken > date_cls.today() + timedelta(days=1):          # сутки запаса: часовой пояс браузера может быть впереди сервера
@@ -261,10 +269,11 @@ async def upload_point_photo(
 
 
 @router.get("/photos/{photo_id}/file")
-async def photo_file(photo_id: int, download: bool = False):
+async def photo_file(photo_id: int, download: bool = False, user: UserOut = Depends(require_password_ok)):
     photo = await visit_photos_repository.get(photo_id)
     if not photo:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Фото не найдено")
+    await accounting.require_point_access(user, photo["point_id"])
     try:
         content = await visit_photos_repository.read_file(photo)
     except TimeoutError:

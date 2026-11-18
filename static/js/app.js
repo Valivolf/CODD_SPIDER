@@ -867,6 +867,7 @@ async function categoriesManagerForm() {
         <input type="checkbox" data-cat-legacy="${c.id}" ${c.is_legacy ? 'checked' : ''}>Старый
       </label>
       <span class="text-xs text-slate-500 shrink-0 whitespace-nowrap">${c.point_count} точ.</span>
+      <button type="button" data-cat-fields="${c.id}" class="${btnGhost} !py-1.5 !px-2.5 text-xs shrink-0">Поля</button>
       <button type="button" data-cat-save="${c.id}" class="${btnGhost} !py-1.5 !px-2.5 text-xs shrink-0">Сохранить</button>
       <button type="button" data-cat-del="${c.id}" class="${btnDanger} !py-1.5 !px-2.5 text-xs shrink-0">Удалить</button>
     </div>`).join('') || '<p class="text-sm text-slate-500 text-center py-4">Категорий пока нет</p>';
@@ -889,6 +890,9 @@ async function categoriesManagerForm() {
         try { await Api.del(`/api/point-categories/${btn.dataset.catDel}`); await reload(); loadPoints(); }
         catch (err) { alert(err.message); }
       };
+    });
+    $('#catList').querySelectorAll('[data-cat-fields]').forEach((btn) => {
+      btn.onclick = () => categoryFieldsForm(list.find((c) => c.id === +btn.dataset.catFields));
     });
   };
 
@@ -923,6 +927,63 @@ async function categoriesManagerForm() {
       $('#catFormError').classList.remove('hidden');
     }
   };
+}
+
+async function categoryFieldsForm(category) {
+  if (!category) return;
+  const fieldTypes = [['text', 'Текст'], ['textarea', 'Длинный текст'], ['number', 'Число'], ['currency', 'Стоимость'], ['date', 'Дата']];
+  const render = async () => {
+    let fields;
+    try { fields = await Api.get(`/api/point-categories/fields?category_id=${category.id}`); }
+    catch (e) { alert('Не удалось загрузить поля категории: ' + e.message); return; }
+    const specific = fields.filter((f) => f.category_id === category.id);
+    modal(`<h2 class="font-display text-lg font-bold mb-1">Поля категории «${esc(category.name)}»</h2>
+      <p class="text-xs text-slate-400 mb-3">Дополнительные поля категории относятся к основной информации о комплексе. Бухгалтерские поля ведутся отдельно.</p>
+      <div id="catFieldList" class="space-y-2 max-h-[360px] overflow-auto pr-1 mb-4">
+        ${specific.map((f) => `<div class="rounded-xl border border-slate-700/50 bg-slate-800/30 p-2.5 flex flex-wrap items-center gap-2">
+          <input type="text" data-pcf-name="${f.id}" value="${esc(f.name)}" class="${fieldCls} flex-1 !py-1.5 min-w-[100px]">
+          <select data-pcf-type="${f.id}" class="${fieldCls} !w-auto !py-1.5">${fieldTypes.map(([key, label]) => `<option value="${key}" ${f.field_type === key ? 'selected' : ''}>${label}</option>`).join('')}</select>
+          <button type="button" data-pcf-save="${f.id}" class="${btnGhost} !py-1.5 !px-2.5 text-xs">Сохранить</button>
+          <button type="button" data-pcf-del="${f.id}" class="${btnDanger} !py-1.5 !px-2.5 text-xs">Удалить</button>
+        </div>`).join('') || '<p class="text-sm text-slate-500">Дополнительных полей для категории нет</p>'}
+      </div>
+      <form id="catFieldAdd" class="flex flex-wrap items-center gap-2">
+        <input name="name" required maxlength="80" placeholder="Название нового поля" class="${fieldCls} flex-1 min-w-[160px]">
+        <select name="field_type" class="${fieldCls} !w-auto">${fieldTypes.map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select>
+        <button class="${btnPrimary}">Добавить поле</button>
+      </form>
+      <div class="flex items-center gap-2 pt-4"><button type="button" class="cancel ${btnGhost}">Закрыть</button></div>`);
+    $('#catFieldList').querySelectorAll('[data-pcf-save]').forEach((button) => {
+      button.onclick = async () => {
+        const id = +button.dataset.pcfSave;
+        try {
+          await Api.put(`/api/point-categories/fields/${id}`, {
+            category_id: category.id, name: $(`[data-pcf-name="${id}"]`).value.trim(),
+            field_type: $(`[data-pcf-type="${id}"]`).value,
+          });
+          await render();
+        } catch (e) { alert(e.message); }
+      };
+    });
+    $('#catFieldList').querySelectorAll('[data-pcf-del]').forEach((button) => {
+      button.onclick = async () => {
+        if (!confirm('Удалить поле и сохранённые в нём значения?')) return;
+        try { await Api.del(`/api/point-categories/fields/${button.dataset.pcfDel}`); await render(); }
+        catch (e) { alert(e.message); }
+      };
+    });
+    $('#catFieldAdd').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target.elements;
+      try {
+        await Api.post('/api/point-categories/fields', {
+          category_id: category.id, name: f.name.value.trim(), field_type: f.field_type.value,
+        });
+        await render();
+      } catch (err) { alert(err.message); }
+    };
+  };
+  await render();
 }
 
 // Настройки → Статусы АПК: add/rename/recolor the point-status dictionary

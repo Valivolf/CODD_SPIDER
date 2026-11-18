@@ -77,7 +77,7 @@ async def login(payload: UserLogin, request: Request, response: Response):
         "role": user["role"],
         "role_name": full.role_name,
         "permissions": full.permissions,
-        "landing": P.landing(full.permissions),          # с какой страницы начинать: первая, на которую у роли есть право
+        "landing": "/apk" if full.role == "accounting" and P.has(full.permissions, "accounting.view") else P.landing(full.permissions),
         "must_change_password": bool(user["must_change_password"]),
     }
 
