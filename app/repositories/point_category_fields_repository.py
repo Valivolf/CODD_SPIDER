@@ -116,7 +116,7 @@ async def fields_for_point(point_id: str) -> list[dict[str, Any]]:
     async with get_connection() as conn:
         cur = await conn.execute(
             """select f.id, f.category_id, c.name, f.name, f.field_type, f.accounting_only,
-                      f.sort_order, coalesce(v.value, '')
+                      f.sort_order, coalesce(v.value, ''), p.accounting_revision
                from points p
                join point_category_fields f on f.category_id is null or f.category_id = p.category_id
                left join point_categories c on c.id = f.category_id
@@ -130,6 +130,7 @@ async def fields_for_point(point_id: str) -> list[dict[str, Any]]:
         {
             "id": row[0], "category_id": row[1], "category_name": row[2] or "", "name": row[3],
             "field_type": row[4], "accounting_only": bool(row[5]), "sort_order": row[6], "value": row[7],
+            "accounting_revision": row[8],
         }
         for row in rows
     ]
@@ -141,22 +142,38 @@ async def point_exists(point_id: str) -> bool:
         return await cur.fetchone() is not None
 
 
-async def save_values(point_id: str, values: dict[int, str]) -> None:
+class AccountingConflict(ValueError):
+    pass
+
+
+async def save_values(point_id: str, values: dict[int, str], *, expected_revision: int | None = None,
+                      allow_accounting: bool = False, allow_general: bool = True) -> None:
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     async with get_connection() as conn:
+        await conn.execute("begin immediate")
         cur = await conn.execute(
-            "select category_id from points where id = ?", (point_id,)
+            "select category_id, accounting_revision from points where id = ?", (point_id,)
         )
         point = await cur.fetchone()
         if not point:
             raise LookupError("Комплекс не найден")
+        accounting_changed = False
         for field_id, value in values.items():
             cur = await conn.execute(
-                "select 1 from point_category_fields where id = ? and (category_id is null or category_id = ?)",
+                "select accounting_only from point_category_fields where id = ? and (category_id is null or category_id = ?)",
                 (field_id, point[0]),
             )
-            if not await cur.fetchone():
+            field = await cur.fetchone()
+            if not field:
                 raise ValueError("Поле не относится к категории этого комплекса")
+            if field[0]:
+                if not allow_accounting:
+                    raise PermissionError("Нет права менять бухгалтерские поля")
+                if expected_revision is None or expected_revision != point[1]:
+                    raise AccountingConflict("Бухгалтерские сведения изменились или версия не передана. Откройте актуальные данные и сравните их со своим вводом; ваши изменения не сохранены.")
+                accounting_changed = True
+            elif not allow_general:
+                raise PermissionError("Нет права менять дополнительные поля АПК")
             if value:
                 await conn.execute(
                     """insert into point_category_field_values (point_id, field_id, value, updated_at)
@@ -169,4 +186,6 @@ async def save_values(point_id: str, values: dict[int, str]) -> None:
                     "delete from point_category_field_values where point_id = ? and field_id = ?",
                     (point_id, field_id),
                 )
+        if accounting_changed:
+            await conn.execute("update points set accounting_revision = accounting_revision + 1 where id = ?", (point_id,))
         await conn.commit()

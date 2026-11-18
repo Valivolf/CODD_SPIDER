@@ -1830,7 +1830,7 @@ async function openPointPhotos(pointId, back = null, focusDate = null, opts = {}
   try { data = await Api.get(listUrl); }
   catch (e) { alert('Не удалось загрузить фото: ' + e.message); return; }
   const open = new Set(focusDate ? [focusDate] : data.days.slice(0, 1).map((d) => d.date));
-  const canUpload = can('photos.upload');
+  const canUpload = can('photos.upload') || (CURRENT_USER?.role === 'accounting' && can('accounting.edit'));
   const today = ppLocalIso(new Date());
   let picked = [];                                                     // выбрано для загрузки: { file, url }
   let busy = false;
@@ -1851,7 +1851,7 @@ async function openPointPhotos(pointId, back = null, focusDate = null, opts = {}
         <div class="flex items-center justify-between gap-2 px-4 py-2.5 cursor-pointer select-none" data-pp-head="${d.date}">
           <span class="text-sm font-semibold"><small class="text-slate-500 mr-1">${open.has(d.date) ? '▾' : '▸'}</small>${esc(ppDayLabel(d.date))}
             <span class="text-slate-500 font-normal">· ${ppPlural(d.photos.length, 'фото', 'фото', 'фото')}</span></span>
-          <a href="/api/monitoring/photos/export?date=${d.date}" data-pp-zip class="${btnGhost} !px-3 !py-1 text-xs" title="Архив всех фото этого дня (по всем комплексам)">Архив .zip</a>
+          ${CURRENT_USER?.role !== 'accounting' ? `<a href="/api/monitoring/photos/export?date=${d.date}" data-pp-zip class="${btnGhost} !px-3 !py-1 text-xs" title="Архив всех фото этого дня (по всем комплексам)">Архив .zip</a>` : ''}
         </div>
         <div class="px-4 pb-3" style="display:${open.has(d.date) ? 'grid' : 'none'}; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:8px">
           ${d.photos.map((ph) => ppThumb({ ...ph, date: d.date })).join('')}</div>

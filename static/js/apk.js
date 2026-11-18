@@ -41,6 +41,7 @@ const PAGE_SIZE = 50;
 // shown, without moving the map out from under them. List view has no such
 // state to lose, so it keeps the simple full re-render.
 function close() {
+  if (CURRENT_USER?.role === 'accounting') { Accounting.close(); return; }
   editing = false;
   $('#modal').innerHTML = '';
   if (apkTab !== 'dir') { if (typeof apkCheckAfterClose === 'function') apkCheckAfterClose(); return; }      // вкладка «Проверка» пересчитывает свои карточки
@@ -1427,8 +1428,13 @@ async function boot() {
   } catch {
     return; // Api.get already redirects to /login on 401
   }
-  if (!canAny('points.view', 'check.use')) { window.location.href = '/'; return; }
+  if (!canAny('points.view', 'check.use', 'accounting.view')) { window.location.href = '/'; return; }
   initUserUi();
+  if (CURRENT_USER.role === 'accounting') {
+    if (CURRENT_USER.must_change_password) { changePasswordForm({ forced: true }); return; }
+    await Accounting.mount($('#content'));
+    return;
+  }
   if (CURRENT_USER.must_change_password) changePasswordForm({ forced: true });
   await loadPointStatuses();
   await loadWorkTypes();

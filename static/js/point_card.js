@@ -13,6 +13,7 @@
   let S = null;                      // состояние открытой карточки
   let styled = false;
   let modalWatch = null;
+  let openSeq = 0;
 
   const fmtSize = (n) => (n < 1024 ? `${n} Б` : n < 1048576 ? `${Math.round(n / 1024)} КБ` : `${(n / 1048576).toFixed(1)} МБ`);
   const $c = (sel) => (S ? S.el.querySelector(sel) : null);
@@ -26,7 +27,7 @@
       body.pc-open #modal>div{z-index:38 !important}
       .pc-overlay{position:fixed;inset:0;z-index:35;overflow:auto;background:rgb(var(--bg-base));color:rgb(var(--text));display:flex;flex-direction:column}
       .pc-top{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:12px 22px;background:rgb(var(--glass-1)/1);border-bottom:1px solid rgb(var(--glass-border)/.28)}
-      .pc-title{font-family:'Manrope',system-ui,sans-serif;font-weight:700;font-size:22px;letter-spacing:-.02em}
+      .pc-title{overflow-wrap:anywhere;min-width:0;font-family:'Manrope',system-ui,sans-serif;font-weight:700;font-size:22px;letter-spacing:-.02em}
       .pc-main{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;padding:16px 22px 48px;width:100%;max-width:1560px;margin:0 auto}
       @media (max-width:960px){.pc-main{grid-template-columns:minmax(0,1fr);padding:12px 10px 36px}.pc-top{padding:10px 12px}}
       .pc-col{display:flex;flex-direction:column;gap:16px;min-width:0}
@@ -88,10 +89,11 @@
 
   // ---------- права ----------
   const perms = () => ({
-    edit: can('points.edit'), secrets: can('points.secrets'), network: can('points.network'),
-    photoView: can('photos.view'), photoUp: can('photos.upload'), reports: canAny('reports.view', 'monitoring.view', 'calendar.view'),
-    accountingView: can('accounting.view'), accountingEdit: can('accounting.edit'),
-    equipment: canAny('equipment.view', 'warehouse.view'),
+    edit: !S?.accounting && can('points.edit'), secrets: can('points.secrets'), network: can('points.network'),
+    photoView: can('photos.view'), photoUp: S?.accounting ? can('accounting.edit') : can('photos.upload'), reports: canAny('reports.view', 'monitoring.view', 'calendar.view'),
+    accountingView: true, accountingEdit: ['admin', 'accounting'].includes(CURRENT_USER?.role) && can('accounting.edit'),
+    equipment: !S?.accounting && canAny('equipment.view', 'warehouse.view'),
+    fileUp: S?.accounting ? can('accounting.edit') : can('points.edit'),
   });
 
   const lockRow = (label, right) => `<div class="pc-row"><div class="pc-lbl">${label}</div><div class="pc-val pc-lock" title="Нужно право «${esc(right)}»">🔒 Скрыто для вашей роли (нужно право «${esc(right)}»)</div></div>`;
@@ -117,9 +119,9 @@
     const { p, mode, isNew } = S;
     const r = perms();
     const title = isNew ? 'Новый комплекс' : `АПК ${esc(p.id)}`;
-    const badges = isNew ? '' : `${pointStatusBadge(p.status, p.stock_partial)} ${p.category_name ? colorBadge(p.category_name, p.category_color) : ''}`;
+    const badges = isNew || S.accounting ? '' : `${pointStatusBadge(p.status, p.stock_partial)} ${p.category_name ? colorBadge(p.category_name, p.category_color) : ''}`;
     return `<div class="pc-title">${title}</div> ${badges}
-      <span style="display:flex;flex-wrap:wrap;gap:6px;margin-left:6px">${chipsHtml(r)}</span>
+      <span style="display:flex;flex-wrap:wrap;gap:6px;margin-left:6px">${S.accounting ? '<span class="pc-chip">Бухгалтерия</span>' : chipsHtml(r)}</span>
       <span style="margin-left:auto;display:flex;flex-wrap:wrap;gap:8px">
         ${mode === 'view' && !isNew && r.equipment ? `<a href="/warehouse?point=${encodeURIComponent(p.id)}" class="${btnGhost} !py-1.5 !px-3 text-sm" title="Открыть состав оборудования и историю перемещений">📦 Оборудование</a>` : ''}
         ${mode === 'view' && r.edit ? `<button type="button" id="pcEdit" class="${btnPrimary} !py-1.5 !px-4 text-sm" title="Изменить сведения о комплексе">✎ Редактировать</button>` : ''}
@@ -128,10 +130,49 @@
       </span>`;
   }
 
+  function fieldValue(f) {
+    const value = f.value ?? '';
+    // Legacy number values may be stored as 2020.0; keep other numbers unchanged.
+    return f.name === 'Год выпуска' ? String(value).replace(/[.,]0+$/, '') : value;
+  }
+
+  function categoryFieldsHtml() {
+    const { categoryFields = [], categoryFieldsError } = S;
+    const r = perms();
+    const showFields = r.accountingView || categoryFields.length || categoryFieldsError;
+    return showFields ? `<div class="pc-panel"><h3>🧾 Учётные и дополнительные поля</h3>
+      ${categoryFieldsError ? `<p class="text-sm text-rose-400">${esc(categoryFieldsError)}</p>` : ''}
+      ${categoryFields.length ? `<form id="pcCategoryFields" class="space-y-2">
+        ${categoryFields.map((f) => {
+          const editable = f.accounting_only ? r.accountingEdit : r.edit;
+          const value = fieldValue(f);
+          const input = f.field_type === 'textarea'
+            ? `<textarea data-category-field="${f.id}" rows="2" class="pc-field-input" ${editable ? '' : 'disabled'}>${esc(value)}</textarea>`
+            : `<input data-category-field="${f.id}" type="${f.field_type === 'date' ? 'date' : f.field_type === 'number' ? 'number' : 'text'}" ${f.field_type === 'currency' ? 'inputmode="decimal"' : f.field_type === 'number' ? 'step="any"' : ''} value="${esc(value)}" class="pc-field-input" ${editable ? '' : 'disabled'}>`;
+          return `<label class="pc-row"><span class="pc-lbl">${esc(f.name)}${f.category_name ? ` · ${esc(f.category_name)}` : ''}</span><span class="pc-val">${input}</span></label>`;
+        }).join('')}
+        ${categoryFields.some((f) => f.accounting_only ? r.accountingEdit : r.edit) ? '<button class="pc-mini" type="submit">Сохранить поля</button>' : ''}
+        <p id="pcFieldsStatus" class="text-sm" aria-live="polite"></p>
+        ${S.accounting ? '<div id="pcFieldsConflict" class="hidden"></div>' : ''}
+      </form>` : '<p class="pc-lock">Поля для этого комплекса пока не заполнены.</p>'}
+    </div>` : '';
+  }
+
+  function accountingColumnsHtml() {
+    const p = S.p;
+    return { left: `<div class="pc-panel"><h3>📋 Основное</h3>
+      ${row('Номер', `<b>${esc(p.id)}</b>`)}
+      ${row('Название камеры', esc(p.accounting_name))}
+      ${row('Адрес', esc(p.address))}
+      ${row('Координаты', p.lat !== '' && p.lat != null && p.lon !== '' && p.lon != null ? `${esc(p.lat)}, ${esc(p.lon)} ${copyBtn(`${p.lat}, ${p.lon}`, 'координаты')}` : '')}
+    </div>` + categoryFieldsHtml(), links: '' };
+  }
+
   // ---------- просмотр (только чтение) ----------
   function viewColumnsHtml() {
     const { p, card, simLinks, categoryFields = [], equipmentPoint, categoryFieldsError, equipmentError } = S;
     const r = perms();
+    if (S.accounting) return accountingColumnsHtml();
     const main = `<div class="pc-panel"><h3>📋 Основное</h3>
       ${row('Номер', `<b>${esc(p.id)}</b>`)}
       ${row('Адрес', esc(p.address))}
@@ -171,21 +212,7 @@
         ${r.reports ? `<button type="button" class="${btnGhost} !py-1.5 !px-3 text-xs" id="pcHistory">🕘 История выездов</button>` : ''}
       </div>
     </div>`;
-    const showFields = r.accountingView || categoryFields.length || categoryFieldsError;
-    const fields = showFields ? `<div class="pc-panel"><h3>🧾 Учётные и дополнительные поля</h3>
-      ${categoryFieldsError ? `<p class="text-sm text-rose-400">${esc(categoryFieldsError)}</p>` : ''}
-      ${categoryFields.length ? `<form id="pcCategoryFields" class="space-y-2">
-        ${categoryFields.map((f) => {
-          const editable = f.accounting_only ? r.accountingEdit : r.edit;
-          const value = f.value || '';
-          const input = f.field_type === 'textarea'
-            ? `<textarea data-category-field="${f.id}" rows="2" class="pc-field-input" ${editable ? '' : 'disabled'}>${esc(value)}</textarea>`
-            : `<input data-category-field="${f.id}" type="${f.field_type === 'date' ? 'date' : f.field_type === 'number' || f.field_type === 'currency' ? 'number' : 'text'}" ${f.field_type === 'currency' || f.field_type === 'number' ? 'step="any"' : ''} value="${esc(value)}" class="pc-field-input" ${editable ? '' : 'disabled'}>`;
-          return `<label class="pc-row"><span class="pc-lbl">${esc(f.name)}${f.category_name ? ` · ${esc(f.category_name)}` : ''}</span><span class="pc-val">${input}</span></label>`;
-        }).join('')}
-        ${categoryFields.some((f) => f.accounting_only ? r.accountingEdit : r.edit) ? '<button class="pc-mini" type="submit">Сохранить поля</button>' : ''}
-      </form>` : '<p class="pc-lock">Поля для этого комплекса пока не заполнены.</p>'}
-    </div>` : '';
+    const fields = categoryFieldsHtml();
     const equipment = r.equipment ? `<div class="pc-panel"><h3>🧰 Оборудование и история перемещений</h3>
       ${equipmentError ? `<p class="text-sm text-rose-400">${esc(equipmentError)}</p>` : equipmentPoint ? `
         <b class="text-xs">Сейчас на комплексе</b>
@@ -269,7 +296,7 @@
     const r = perms();
     const files = S.card.files || [];
     return `<div class="pc-panel" id="pcFilesPanel"><h3>📎 Файлы <span class="pc-chip" id="pcFilesCount">${files.length}</span></h3>
-      ${r.edit ? `<div class="pc-drop" id="pcDrop">
+      ${r.fileUp ? `<div class="pc-drop" id="pcDrop">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
           <label class="${btnPrimary} !py-1 !px-3 text-xs" style="cursor:pointer" title="Любые документы, фото, схемы — до 25 МБ каждый">➕ Добавить файлы…
             <input type="file" id="pcFileInput" multiple style="display:none"></label>
@@ -321,7 +348,7 @@
   }
 
   const formSnapshot = () => { const f = $c('#pcForm'); return f ? JSON.stringify([...new FormData(f).entries()]) + readPowerSource(f) : ''; };
-  const dirty = () => S && S.mode === 'edit' && S.snapshot !== undefined && formSnapshot() !== S.snapshot;
+  const dirty = () => S && (S.fieldsDirty || (S.mode === 'edit' && S.snapshot !== undefined && formSnapshot() !== S.snapshot));
 
   function wire() {
     $c('#pcClose').onclick = () => closeCard();
@@ -336,7 +363,10 @@
     if ($c('#pcForm')) $c('#pcForm').onsubmit = (e) => { e.preventDefault(); saveCard(); };
     if ($c('#pcDelete')) $c('#pcDelete').onclick = deleteCard;
     if ($c('#pcHistory')) $c('#pcHistory').onclick = () => openVisitJournal(S.p.id);
-    if ($c('#pcCategoryFields')) $c('#pcCategoryFields').onsubmit = saveCategoryFields;
+    if ($c('#pcCategoryFields')) {
+      $c('#pcCategoryFields').onsubmit = saveCategoryFields;
+      if (S.accounting) $c('#pcCategoryFields').oninput = () => { S.fieldsDirty = true; };
+    }
     S.el.querySelectorAll('[data-pc-copy]').forEach((b) => { b.onclick = () => copyText2(b.dataset.pcCopy, b); });
     S.el.querySelectorAll('[data-pc-reveal]').forEach((b) => {
       b.onclick = () => {
@@ -372,10 +402,12 @@
 
   async function loadPhotos() {
     if (!S || S.isNew) return;
+    const state = S;
     if (perms().photoView) {
-      try { S.photos = await Api.get('/api/monitoring/photos/point-items?point_id=' + encodeURIComponent(S.p.id)); }
-      catch { S.photos = { total: 0, days: [] }; }
-    } else S.photos = { total: 0, days: [] };
+      try { state.photos = await Api.get('/api/monitoring/photos/point-items?point_id=' + encodeURIComponent(state.p.id)); }
+      catch { state.photos = { total: 0, days: [] }; }
+    } else state.photos = { total: 0, days: [] };
+    if (S !== state) return;
     const box = $c('#pcPhotosBox');
     if (box) { box.innerHTML = photosHtml(); wirePhotos(); }
   }
@@ -606,7 +638,9 @@
 
   function closeCard(force) {
     if (!S) return;
+    if (S.savingFields || S.uploading) { toast('Дождитесь завершения сохранения или загрузки', 'warn'); return; }
     if (!force && dirty() && !confirm('Закрыть карточку без сохранения? Изменения будут потеряны.')) return;
+    ++openSeq;
     closeViewer();
     const changed = S.changed;
     if (modalWatch) { modalWatch.disconnect(); modalWatch = null; }
@@ -629,54 +663,99 @@
   }
 
   async function loadCardData() {
-    const r = perms();
+    const r = perms(), state = S;
+    if (state.accounting) {
+      state.categoryFields = state.p.accounting_fields.map((f) => ({ ...f, accounting_only: true, accounting_revision: state.p.accounting_revision }));
+      try { state.card.files = await Api.get('/api/point-files?point_id=' + encodeURIComponent(state.p.id)); }
+      catch (e) { state.card.files = []; toast('Не удалось загрузить файлы: ' + e.message, 'warn'); }
+      return;
+    }
     const [card, links, categoryFields, equipmentPoint] = await Promise.all([
-      Api.get('/api/point-card?point_id=' + encodeURIComponent(S.p.id)).catch(() => ({ groups: [], plan: null, files: [] })),
-      Api.get(`/api/points/${encodeURIComponent(S.p.id)}/sim-links`).catch(() => ({ linked: [] })),
-      Api.get('/api/point-category-fields/point/' + encodeURIComponent(S.p.id)).then((items) => ({ items, error: '' }), (e) => ({ items: [], error: e.message })),
+      Api.get('/api/point-card?point_id=' + encodeURIComponent(state.p.id)).catch(() => ({ groups: [], plan: null, files: [] })),
+      Api.get(`/api/points/${encodeURIComponent(state.p.id)}/sim-links`).catch(() => ({ linked: [] })),
+      Api.get('/api/point-category-fields/point/' + encodeURIComponent(state.p.id)).then((items) => ({ items, error: '' }), (e) => ({ items: [], error: e.message })),
       r.equipment
-        ? Api.get('/api/equipment/points/' + encodeURIComponent(S.p.id)).then((item) => ({ item, error: '' }), (e) => ({ item: null, error: e.message }))
+        ? Api.get('/api/equipment/points/' + encodeURIComponent(state.p.id)).then((item) => ({ item, error: '' }), (e) => ({ item: null, error: e.message }))
         : Promise.resolve({ item: null, error: '' }),
     ]);
-    S.card = card;
-    S.simLinks = links.linked || [];
-    S.categoryFields = categoryFields.items;
-    S.categoryFieldsError = categoryFields.error;
-    S.equipmentPoint = equipmentPoint.item;
-    S.equipmentError = equipmentPoint.error;
+    state.card = card;
+    state.simLinks = links.linked || [];
+    state.categoryFields = categoryFields.items;
+    state.categoryFieldsError = categoryFields.error;
+    state.equipmentPoint = equipmentPoint.item;
+    state.equipmentError = equipmentPoint.error;
   }
 
   async function saveCategoryFields(event) {
     event.preventDefault();
-    const values = {};
-    $c('#pcCategoryFields').querySelectorAll('[data-category-field]:not(:disabled)').forEach((input) => {
+    if (S.savingFields) return;
+    const state = S, form = $c('#pcCategoryFields'), values = {};
+    form.querySelectorAll('[data-category-field]:not(:disabled)').forEach((input) => {
       values[input.dataset.categoryField] = input.value;
     });
+    if (S.accounting && !Object.values(values).some((v) => v.trim()) && !confirm('Все бухгалтерские значения пусты. АПК исчезнет из бухгалтерского списка. Сохранить?')) return;
+    const controls = [...form.querySelectorAll('input:not(:disabled), textarea:not(:disabled), button:not(:disabled)')];
+    state.savingFields = true; controls.forEach((el) => { el.disabled = true; });
     try {
-      S.categoryFields = await Api.put('/api/point-category-fields/point/' + encodeURIComponent(S.p.id), { values });
-      S.changed = true;
+      const expected_revision = S.categoryFields.find((f) => f.accounting_only)?.accounting_revision;
+      const fields = await Api.put('/api/point-category-fields/point/' + encodeURIComponent(S.p.id), { values, expected_revision });
+      if (S !== state) return;
+      S.categoryFields = fields;
+      if (S.accounting) {
+        S.p.accounting_name = fields.find((f) => f.name.toLowerCase().replace(/ё/g, 'е') === 'наименование в бухгалтерском учете')?.value || '';
+        S.p.accounting_revision = fields.find((f) => f.accounting_only)?.accounting_revision;
+      }
+      S.fieldsDirty = false; S.changed = true;
       render();
+      $c('#pcFieldsStatus').textContent = 'Сохранено';
+      if (S.onChange) S.onChange();
       toast('Поля сохранены', 'ok');
     } catch (e) {
+      if (S !== state) return;
+      $c('#pcFieldsStatus').textContent = 'Не удалось сохранить поля: ' + e.message;
+      if (S.accounting) {
+        const box = $c('#pcFieldsConflict');
+        box.classList.remove('hidden');
+        box.innerHTML = '<p>Ваш ввод остался в форме. Проверьте актуальные сведения перед повторным сохранением.</p><button type="button" id="pcCompare" class="pc-mini">Показать актуальные данные</button><div id="pcLatest" class="space-y-2"></div>';
+        $c('#pcCompare').onclick = async () => {
+          try {
+            const fresh = await Api.get('/api/accounting/point?point_id=' + encodeURIComponent(state.p.id));
+            if (S !== state) return;
+            $c('#pcLatest').innerHTML = fresh.accounting_fields.map((f) => `<p class="break-words"><b>${esc(f.name)}:</b> ${esc(fieldValue(f) || '—')}</p>`).join('') + '<button type="button" id="pcUseLatest" class="pc-mini">Загрузить актуальные значения в форму</button>';
+            $c('#pcUseLatest').onclick = () => {
+              if (!confirm('Заменить ввод актуальными данными? Несохранённые изменения будут потеряны.')) return;
+              S.p = fresh;
+              S.categoryFields = fresh.accounting_fields.map((f) => ({ ...f, accounting_only: true, accounting_revision: fresh.accounting_revision }));
+              S.fieldsDirty = false; render();
+            };
+          } catch (err) { toast(err.message, 'warn'); }
+        };
+      }
       toast('Не удалось сохранить поля: ' + e.message, 'error');
+    } finally {
+      state.savingFields = false; controls.forEach((el) => { el.disabled = false; });
     }
   }
 
   // Точка входа. id = null — новый комплекс (сразу в режиме правки). opts.edit — открыть сразу на правку.
   async function openPointCard(id, opts = {}) {
     injectStyle();
-    if (S) closeCard(true);
+    if (S) { closeCard(); if (S) return; }
+    const seq = ++openSeq;
+    const accounting = CURRENT_USER?.role === 'accounting' || !!opts.accounting;
+    if (accounting && !id) return;
     let p;
     if (id) {
-      try { p = await Api.get('/api/points/' + encodeURIComponent(id)); }
+      try { p = await Api.get(accounting ? '/api/accounting/point?point_id=' + encodeURIComponent(id) : '/api/points/' + encodeURIComponent(id)); }
       catch (e) { alert('Комплекс не найден или недоступен: ' + e.message); return; }
     } else if (!can('points.edit')) { alert('У вашей роли нет права создавать комплексы.'); return; }
+    if (seq !== openSeq) return;
     const el = document.createElement('div');
     el.className = 'pc-overlay';
     el.id = 'pcOverlay';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Карточка комплекса');
-    S = { id, p: { ...EMPTY_POINT, ...(p || {}) }, isNew: !id, mode: (!id || (opts.edit && can('points.edit'))) ? 'edit' : 'view', card: { groups: [], plan: null, files: [] }, categoryFields: [], equipmentPoint: null, simLinks: [], photos: null, el, changed: false, prevOverflow: document.body.style.overflow };
+    S = { id, accounting, onChange: opts.onChange, p: { ...EMPTY_POINT, ...(p || {}) }, isNew: !id, mode: (!id || (opts.edit && !accounting && can('points.edit'))) ? 'edit' : 'view', card: { groups: [], plan: null, files: [] }, categoryFields: [], equipmentPoint: null, simLinks: [], photos: null, el, changed: false, prevOverflow: document.body.style.overflow };
     document.body.appendChild(el);
     document.body.style.overflow = 'hidden';
     document.body.classList.add('pc-open');
@@ -685,6 +764,7 @@
     modalWatch = new MutationObserver(() => { if (S && !($('#modal') || {}).innerHTML) editing = true; });   // окно поверх карточки закрылось — опрос страницы по-прежнему на паузе
     modalWatch.observe($('#modal'), { childList: true });
     if (!S.isNew) await loadCardData();
+    if (seq !== openSeq || !S) return;
     render();
     if (!S.isNew) loadPhotos();
   }
@@ -703,7 +783,7 @@
     if (e.target.closest(BRICK_CONTROLS)) return;
     const sel = window.getSelection && window.getSelection();
     if (sel && String(sel).trim()) return;
-    if (typeof canAny === 'function' && !canAny('points.view', 'points.edit', 'calendar.view')) return;
+    if (typeof canAny === 'function' && !canAny('points.view', 'points.edit', 'calendar.view', 'accounting.view')) return;
     if (!e.target.closest('[data-brick-name]')) {
       for (const el of brick.querySelectorAll(BRICK_CONTROLS)) {
         const r = el.getBoundingClientRect();

@@ -418,6 +418,8 @@ async def init_db() -> None:
         # onto a `points` table that already existed before this turn.
         for col, ddl in (
             ("inventory_number", "text not null default ''"),
+            # Optimistic locking of accounting values; existing values are not rewritten.
+            ("accounting_revision", "integer not null default 0"),
             ("sim_number", "text not null default ''"),
             ("ip_address", "text not null default ''"),
             ("port", "text not null default ''"),

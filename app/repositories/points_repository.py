@@ -9,6 +9,7 @@ avoid that.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from typing import Any, Optional
 
@@ -379,104 +380,75 @@ async def search_points(
     return items, total
 
 
-async def search_accounting_points(search: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
-    """Минимальный список комплексов для отдельной страницы бухгалтерии.
+def _accounting_value_sql(name: str) -> str:
+    # Names are internal constants, never request input. Both е/ё spellings are accepted.
+    return ("(select v.value from point_category_field_values v join point_category_fields f on f.id = v.field_id "
+            "where v.point_id = p.id and f.accounting_only = 1 "
+            "and (f.category_id is null or f.category_id = p.category_id) "
+            f"and replace(pylower(f.name), 'ё', 'е') = '{name}' order by f.id limit 1)")
 
-    Поиск учитывает общие сведения и значения всех дополнительных полей, но
-    в ответ включаются только поля, закреплённые за бухгалтерией.
-    """
-    where: list[str] = []
+
+_ACCOUNTING_NAME_SQL = _accounting_value_sql("наименование в бухгалтерском учете")
+_ACCOUNTING_INVENTORY_SQL = _accounting_value_sql("инвентарный номер")
+_ACCOUNTING_PRESENT_SQL = """exists (
+    select 1 from point_category_field_values v join point_category_fields f on f.id = v.field_id
+    where v.point_id = p.id and f.accounting_only = 1
+      and (f.category_id is null or f.category_id = p.category_id) and length(trim(v.value)) > 0
+)"""
+
+
+async def search_accounting_points(search: str = "", limit: int = 50, offset: int = 0, *,
+                                   registered_only: bool = True, point_id: str | None = None,
+                                   inventory: str | None = None,
+                                   point_ids: list[str] | None = None) -> tuple[list[dict[str, Any]], int]:
+    """Allowlisted accounting projection; no technical columns or technical search terms."""
+    where: list[str] = [_ACCOUNTING_PRESENT_SQL] if registered_only else []
     params: list[Any] = []
-    words = [word for word in search.split() if word]
-    for word in words:
-        like = f"%{word}%"
-        compact = compact_name(word)
-        branches = [
-            "pylower(p.id) like pylower(?)",
-            "pylower(coalesce(p.inventory_number, '')) like pylower(?)",
-            "pylower(coalesce(p.address, '')) like pylower(?)",
-            "pylower(coalesce(p.description, '')) like pylower(?)",
-            "pylower(coalesce(p.status, '')) like pylower(?)",
-            "pylower(coalesce(p.notes, '')) like pylower(?)",
-            "pylower(coalesce(p.verification_valid_until, '')) like pylower(?)",
-            "pylower(coalesce(p.power_source, '')) like pylower(?)",
-            "pylower(coalesce(p.fault_reason, '')) like pylower(?)",
-            "pylower(coalesce(p.fault_need, '')) like pylower(?)",
-        ]
-        params.extend([like] * len(branches))
-        if compact:
-            branches.append(
-                "pycompact(coalesce(p.id, '') || ' ' || coalesce(p.inventory_number, '') || ' ' "
-                "|| coalesce(p.address, '') || ' ' || coalesce(p.description, '') || ' ' "
-                "|| coalesce(p.status, '') || ' ' || coalesce(p.lat, '') || ' ' || coalesce(p.lon, '') || ' ' "
-                "|| coalesce(p.notes, '') || ' ' || coalesce(p.verification_valid_until, '') || ' ' "
-                "|| coalesce(p.power_source, '') || ' ' || coalesce(p.fault_reason, '') || ' ' "
-                "|| coalesce(p.fault_need, '')) like ?"
-            )
-            params.append(f"%{compact}%")
-        value_match = "pylower(v.value) like pylower(?)"
-        value_params = [like]
-        if compact:
-            value_match = f"({value_match} or pycompact(v.value) like ?)"
-            value_params.append(f"%{compact}%")
-        branches.append(
-            f"""exists (
-                select 1
-                from point_category_field_values v
-                join point_category_fields f on f.id = v.field_id
-                where v.point_id = p.id
-                  and (f.category_id is null or f.category_id = p.category_id)
-                  and {value_match}
-            )"""
-        )
-        params.extend(value_params)
-        where.append("(" + " or ".join(branches) + ")")
-
+    if point_ids is not None:
+        where.append("p.id in (select value from json_each(?))")
+        params.append(json.dumps(point_ids))
+    if point_id is not None:
+        where.append("p.id = ?")
+        params.append(point_id)
+    if inventory is not None:
+        # Inventory identifiers remain strings. No punctuation stripping or numeric conversion.
+        where.append(f"(pylower(trim(p.inventory_number)) = pylower(?) or "
+                     f"pylower(trim(coalesce({_ACCOUNTING_INVENTORY_SQL}, ''))) = pylower(?))")
+        params.extend([inventory.strip(), inventory.strip()])
+    for word in search.split():
+        like = "%" + word.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        cols = ["p.id", "p.inventory_number", _ACCOUNTING_NAME_SQL, _ACCOUNTING_INVENTORY_SQL]
+        where.append("(" + " or ".join(f"pylower(coalesce({c}, '')) like pylower(?) escape '!'" for c in cols) + ")")
+        params.extend([like] * len(cols))
     where_sql = (" where " + " and ".join(where)) if where else ""
     async with get_connection() as conn:
-        cur = await conn.execute(
-            "select count(*) from points p" + where_sql,
-            params,
-        )
+        # One snapshot for the values and their version.
+        await conn.execute("begin")
+        cur = await conn.execute("select count(*) from points p" + where_sql, params)
         (total,) = await cur.fetchone()
         cur = await conn.execute(
-            "select p.id, p.inventory_number, p.status, p.address, p.lat, p.lon, p.category_id, "
-            f"{_STOCK_PARTIAL_SQL} "
-            "from points p" + where_sql + " order by p.id limit ? offset ?",
-            [*params, limit, offset],
-        )
-        rows = await cur.fetchall()
-        items = [
-            {
-                "id": row[0],
-                "inventory_number": row[1] or "",
-                "status": row[2] or "",
-                "address": row[3] or "",
-                "lat": row[4] or "",
-                "lon": row[5] or "",
-                "stock_partial": bool(row[7]),
-                "accounting_fields": [],
-            }
-            for row in rows
-        ]
+            "select p.id, p.inventory_number, p.address, p.lat, p.lon, p.accounting_revision, "
+            f"{_ACCOUNTING_NAME_SQL}, {_ACCOUNTING_INVENTORY_SQL}, {_ACCOUNTING_PRESENT_SQL} "
+            "from points p" + where_sql + " order by p.id limit ? offset ?", [*params, limit, offset])
+        items = [dict(zip(("id", "inventory_number", "address", "lat", "lon", "accounting_revision",
+                           "accounting_name", "accounting_inventory", "has_accounting"), row))
+                 for row in await cur.fetchall()]
+        for item in items:
+            item["accounting_fields"] = []
+            item["accounting_name"] = item["accounting_name"] or ""
+            item["accounting_inventory"] = item["accounting_inventory"] or ""
+            item["has_accounting"] = bool(item["has_accounting"])
         if items:
-            point_ids = [item["id"] for item in items]
-            placeholders = ", ".join("?" for _ in point_ids)
+            by_id = {item["id"]: item for item in items}
             cur = await conn.execute(
-                f"""select p.id, f.id, f.name, f.field_type, coalesce(v.value, '')
-                    from points p
-                    join point_category_fields f on f.accounting_only = 1
+                """select p.id, f.id, f.name, f.field_type, coalesce(v.value, '')
+                    from points p join point_category_fields f on f.accounting_only = 1
                       and (f.category_id is null or f.category_id = p.category_id)
                     left join point_category_field_values v on v.point_id = p.id and v.field_id = f.id
-                    where p.id in ({placeholders})
-                    order by f.category_id is not null, f.sort_order, f.name collate nocase""",
-                point_ids,
-            )
-            by_id = {item["id"]: item for item in items}
-            for point_id, field_id, name, field_type, value in await cur.fetchall():
-                by_id[point_id]["accounting_fields"].append(
-                    {"id": field_id, "name": name, "field_type": field_type, "value": value or ""}
-                )
+                    where p.id in (select value from json_each(?)) order by f.sort_order, f.id""",
+                (json.dumps(list(by_id)),))
+            for pid, fid, name, typ, value in await cur.fetchall():
+                by_id[pid]["accounting_fields"].append({"id": fid, "name": name, "field_type": typ, "value": value})
     return items, total
 
 

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.deps import require_password_ok
+from app.core import accounting
 from app.models.user import UserOut
 from app.repositories import apk_groups_repository, point_plans_repository
 from app.services import point_files
@@ -53,9 +54,12 @@ async def _point_exists(point_id: str) -> str:
 
 
 @router.get("/point-card")
-async def point_card(point_id: str = Query(...)):
+async def point_card(point_id: str = Query(...), user: UserOut = Depends(require_password_ok)):
     """Что ещё показывает карточка комплекса, кроме самих полей: подгруппы (с описанием и «что нужно» по комплексу), запись в плане и файлы."""
     pid = await _point_exists(point_id)
+    await accounting.require_point_access(user, pid)
+    if accounting.is_accountant(user):
+        return {"files": await point_files.list_for_point(pid)}
     groups = await apk_groups_repository.groups_of_point(pid)
     plan = await point_plans_repository.find_by_point(pid)
     return {
@@ -66,8 +70,9 @@ async def point_card(point_id: str = Query(...)):
 
 
 @router.get("/point-files")
-async def list_files(point_id: str = Query(...)):
+async def list_files(point_id: str = Query(...), user: UserOut = Depends(require_password_ok)):
     pid = await _point_exists(point_id)
+    await accounting.require_point_access(user, pid)
     return await point_files.list_for_point(pid)
 
 
@@ -75,6 +80,7 @@ async def list_files(point_id: str = Query(...)):
 async def upload_file(point_id: str = Form(...), comment: str = Form(""), file: UploadFile = File(...), user: UserOut = Depends(require_password_ok)):
     """Один файл за запрос: страница шлёт по одному, чтобы большая пачка не упиралась в предел запроса и сбой одного файла не отменял остальные."""
     pid = await _point_exists(point_id)
+    await accounting.require_point_access(user, pid, write=True)
     content = await _read_capped(file, point_files.MAX_FILE_BYTES)
     try:
         return await point_files.save(pid, file.filename or "", content, user.username, comment)
@@ -90,8 +96,9 @@ async def _file_or_404(file_id: int) -> dict:
 
 
 @router.get("/point-files/{file_id}/file")
-async def file_content(file_id: int, download: bool = False):
+async def file_content(file_id: int, download: bool = False, user: UserOut = Depends(require_password_ok)):
     rec = await _file_or_404(file_id)
+    await accounting.require_point_access(user, rec["point_id"])
     name = rec["name"]
     ascii_name = "".join(c if c.isascii() and c.isalnum() or c in "._-" else "_" for c in name) or f"file-{file_id}"
     inline = point_files.inline_ok(rec) and not download
@@ -105,8 +112,9 @@ async def file_content(file_id: int, download: bool = False):
 
 
 @router.get("/point-files/{file_id}/preview")
-async def file_preview(file_id: int):
+async def file_preview(file_id: int, user: UserOut = Depends(require_password_ok)):
     rec = await _file_or_404(file_id)
+    await accounting.require_point_access(user, rec["point_id"])
     try:
         data = point_files.preview(rec, point_files.read_bytes(file_id))
     except point_files.FileError as exc:

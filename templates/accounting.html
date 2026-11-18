@@ -50,7 +50,7 @@
     </div>
   </header>
 
-  <main class="space-y-4">
+  <main class="glass rounded-3xl p-6 md:p-8 shadow-xl">
     <section class="glass rounded-3xl p-4 md:p-6 shadow-xl">
       <label for="accountingSearch" class="block text-sm font-semibold mb-2">Поиск по комплексу, адресу, инвентарному номеру и значениям полей</label>
       <div class="flex flex-wrap gap-2">
@@ -75,6 +75,8 @@
 <script src="{{ asset_url('static/js/sounds.js') }}"></script>
 <script src="{{ asset_url('static/js/api.js') }}"></script>
 <script src="{{ asset_url('static/js/ui.js') }}"></script>
+<script src="{{ asset_url('static/js/point_card.js') }}"></script>
 <script src="{{ asset_url('static/js/accounting.js') }}"></script>
+<script>let CURRENT_USER = null; function close() { Accounting.close(); }</script>
 </body>
 </html>
